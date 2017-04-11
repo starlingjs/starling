@@ -1,0 +1,13 @@
+[package]
+authors = ["Nick Fitzgerald <fitzgen@gmail.com>"]
+name = "hottub"
+version = "0.1.0"
+
+[[bin]]
+name = "hottub"
+path = "src/bin/hottub.rs"
+doc = false
+
+[dependencies]
+futures = "0.1.13"
+tokio-core = "0.1.6"
