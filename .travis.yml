@@ -1,0 +1,21 @@
+language: rust
+
+rust:
+  - stable
+  - beta
+  - nightly
+
+cache: cargo
+
+env:
+  matrix:
+    - PROFILE="--release"
+    - PROFILE=""
+
+
+script:
+  - cargo build $PROFILE --verbose
+  - cargo test $PROFILE --verbose
+  - if [[ "$PROFILE" == "--release" ]]; then
+        cargo bench;
+    fi
