@@ -11,3 +11,7 @@ doc = false
 [dependencies]
 futures = "0.1.13"
 tokio-core = "0.1.6"
+
+[dependencies.js]
+git = "https://github.com/fitzgen/mozjs"
+branch = "smup"
