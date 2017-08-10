@@ -1,17 +1,31 @@
 [package]
-authors = ["Nick Fitzgerald <fitzgen@gmail.com>"]
+authors = ["The Starling Project Developers"]
+description = "The project that will henceforth be known as `starling`."
 name = "starling"
 version = "0.1.0"
-
 [[bin]]
+doc = false
 name = "starling"
 path = "src/bin/starling.rs"
-doc = false
+required-features = ["clap"]
 
 [dependencies]
+error-chain = "0.10.0"
 futures = "0.1.13"
 tokio-core = "0.1.6"
 
+[dependencies.clap]
+optional = true
+version = "2.26.0"
+
+[dependencies.backtrace]
+features = ["cpp_demangle"]
+version = "0.3.2"
+
 [dependencies.js]
-git = "https://github.com/fitzgen/mozjs"
 branch = "smup"
+git = "https://github.com/fitzgen/mozjs"
+
+[features]
+default = ["clap"]
+debugmozjs = ['js/debugmozjs']

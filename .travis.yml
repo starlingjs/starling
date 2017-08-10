@@ -1,21 +1,42 @@
 language: rust
 
+dist: trusty
+
+os:
+  - linux
+  - osx
+
+addons:
+  apt:
+    sources:
+      # Provides newer gcc.
+      - ubuntu-toolchain-r-test
+      # Provides libclang 3.9.
+      - llvm-toolchain-trusty-3.9
+    packages:
+      - autoconf2.13
+      # bindgen requires libclang >= 3.9.
+      - clang-3.9
+      # SpiderMonkey needs gcc >= 4.9 and 5 is ICEing.
+      - gcc-6
+      - g++-6
+
 rust:
-  - stable
-  - beta
   - nightly
 
 cache: cargo
 
 env:
   matrix:
-    - PROFILE="--release"
-    - PROFILE=""
+    - PROFILE="--release" FEATURES=""
+    - PROFILE=""          FEATURES=""
+    - PROFILE="--release" FEATURES="--features debugmozjs"
+    - PROFILE=""          FEATURES="--features debugmozjs"
 
+before_install:
+- source ./ci/before_install.sh
 
 script:
-  - cargo build $PROFILE --verbose
-  - cargo test $PROFILE --verbose
-  - if [[ "$PROFILE" == "--release" ]]; then
-        cargo bench;
-    fi
+  - ccache -z
+  - PROFILE="$PROFILE" FEATURES="$FEATURES" travis_wait 60 ./ci/script.sh
+  - ccache --show-stats
