@@ -23,7 +23,7 @@ features = ["cpp_demangle"]
 version = "0.3.2"
 
 [dependencies.js]
-branch = "smup"
+branch = "smup-smup"
 git = "https://github.com/fitzgen/mozjs"
 
 [features]
