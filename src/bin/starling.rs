@@ -1,9 +1,7 @@
 extern crate clap;
-extern crate error_chain;
 extern crate starling;
 
 use clap::{App, Arg};
-use error_chain::ChainedError;
 use std::process;
 
 /// Parse the given CLI arguments into a `starling::Options` configuration
@@ -31,7 +29,7 @@ fn parse_cli_args() -> starling::Options {
 fn main() {
     let opts = parse_cli_args();
     if let Err(e) = opts.run() {
-        println!("{}", e.display());
+        println!("{}", e);
         process::exit(1);
     }
 }
