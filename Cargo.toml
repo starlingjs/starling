@@ -9,6 +9,9 @@ name = "starling"
 path = "src/bin/starling.rs"
 required-features = ["clap"]
 
+[build-dependencies]
+glob = "0.2.11"
+
 [dependencies]
 derive-error-chain = "0.11.0"
 derive_is_enum_variant = "0.1.1"
