@@ -9,9 +9,9 @@
 #![allow(unused_doc_comment)]
 
 #[macro_use]
-extern crate derive_is_enum_variant;
+extern crate derive_error_chain;
 #[macro_use]
-extern crate error_chain;
+extern crate derive_is_enum_variant;
 #[macro_use]
 extern crate futures;
 extern crate futures_cpupool;
@@ -22,7 +22,7 @@ extern crate tokio_core;
 
 pub(crate) mod task;
 
-use futures::{future, Future, Sink, Stream};
+use futures::{Sink, Stream};
 use futures_cpupool::CpuPool;
 use futures::sync::mpsc;
 use std::cmp;
@@ -33,38 +33,39 @@ use std::path;
 use std::sync::Arc;
 use std::thread;
 
-error_chain! {
-    foreign_links {
-        Io(::std::io::Error)
-        /// An IO error.
-            ;
+/// The kind of error that occurred.
+#[derive(Debug, ErrorChain)]
+pub enum ErrorKind {
+    /// Some other kind of miscellaneous error, described in the given string.
+    Msg(String),
 
-        SendError(mpsc::SendError<()>)
-        /// Tried to send a value on a channel when the receiving half was
-        /// already dropped.
-            ;
-    }
+    /// An IO error.
+    #[error_chain(foreign)]
+    Io(::std::io::Error),
 
-    errors {
-        /// Could not create a JavaScript runtime.
-        CouldNotCreateJavaScriptRuntime {
-            description("Could not create a JavaScript Runtime")
-            display("Could not create a JavaScript Runtime")
-        }
+    /// Tried to send a value on a channel when the receiving half was already
+    /// dropped.
+    #[error_chain(foreign)]
+    SendError(mpsc::SendError<()>),
 
-        /// Could not read a value from a channel.
-        CouldNotReadValueFromChannel {
-            description("Could not read a value from a channel")
-            display("Could not read a value from a channel")
-        }
+    /// Could not create a JavaScript runtime.
+    #[error_chain(custom)]
+    #[error_chain(description = r#"|| "Could not create a JavaScript Runtime""#)]
+    #[error_chain(display = r#"|| write!(f, "Could not create a JavaScript Runtime")"#)]
+    CouldNotCreateJavaScriptRuntime,
 
-        /// There was an exception in JavaScript code.
-        // TODO: stack, line, column, filename, etc
-        JavaScriptException {
-            description("JavaScript exception")
-            display("JavaScript exception")
-        }
-    }
+    /// Could not read a value from a channel.
+    #[error_chain(custom)]
+    #[error_chain(description = r#"|| "Could not read a value from a channel""#)]
+    #[error_chain(display = r#"|| write!(f, "Could not read a value from a channel")"#)]
+    CouldNotReadValueFromChannel,
+
+    /// There was an exception in JavaScript code.
+    // TODO: stack, line, column, filename, etc
+    #[error_chain(custom)]
+    #[error_chain(description = r#"|| "JavaScript exception""#)]
+    #[error_chain(display = r#"|| write!(f, "JavaScript exception")"#)]
+    JavaScriptException,
 }
 
 impl Clone for Error {

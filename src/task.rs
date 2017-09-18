@@ -25,7 +25,7 @@
 //! [ongoing]: https://bugzilla.mozilla.org/show_bug.cgi?id=1323066
 
 use super::{Error, ErrorKind, Result, StarlingHandle, StarlingMessage};
-use futures::{self, future, Async, Future, Sink};
+use futures::{self, Async, Future, Sink};
 use futures::sync::oneshot;
 use futures_cpupool::CpuFuture;
 use futures::sync::mpsc;
