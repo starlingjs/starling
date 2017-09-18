@@ -66,6 +66,19 @@ pub(crate) struct Task {
     state: State,
 }
 
+impl Drop for Task {
+    fn drop(&mut self) {
+        #[allow(unsafe_code)]
+        unsafe {
+            jsapi::JS_RemoveExtraGCRootsTracer(
+                self.runtime.cx(),
+                Some(Self::trace_task_gc_roots),
+                self as *const _ as *mut _
+            );
+        }
+    }
+}
+
 /// ### Constructors
 ///
 /// There are two kinds of tasks: the main task and child tasks. There is only
