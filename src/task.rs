@@ -150,26 +150,7 @@ impl Task {
             state: State::Created,
         });
 
-        #[allow(unsafe_code)]
-        unsafe {
-            let cx = task.runtime.cx();
-
-            rooted!(in(cx) let global = jsapi::JS_NewGlobalObject(
-                cx,
-                &js::rust::SIMPLE_GLOBAL_CLASS,
-                ptr::null_mut(),
-                jsapi::JS::OnNewGlobalHookOption::FireOnNewGlobalHook,
-                &jsapi::JS::CompartmentOptions::default()
-            ));
-            assert!(!global.get().is_null());
-            task.global.set(global.get());
-
-            assert!(jsapi::JS_AddExtraGCRootsTracer(
-                cx,
-                Some(Self::trace_task_gc_roots),
-                &task as *const _ as *mut _
-            ));
-        }
+        task.create_global();
 
         Ok(task)
     }
@@ -194,6 +175,31 @@ impl Task {
 
     fn id(&self) -> TaskId {
         self.handle.id
+    }
+
+    fn create_global(&self) {
+        assert_eq!(self.global.get(), ptr::null_mut());
+
+        #[allow(unsafe_code)]
+        unsafe {
+            let cx = self.runtime.cx();
+
+            rooted!(in(cx) let global = jsapi::JS_NewGlobalObject(
+                cx,
+                &js::rust::SIMPLE_GLOBAL_CLASS,
+                ptr::null_mut(),
+                jsapi::JS::OnNewGlobalHookOption::FireOnNewGlobalHook,
+                &jsapi::JS::CompartmentOptions::default()
+            ));
+            assert!(!global.get().is_null());
+            self.global.set(global.get());
+
+            assert!(jsapi::JS_AddExtraGCRootsTracer(
+                cx,
+                Some(Self::trace_task_gc_roots),
+                self as *const _ as *mut _
+            ));
+        }
     }
 
     // Notify the SpiderMonkey GC of our additional GC roots.
