@@ -1,6 +1,6 @@
 [package]
 authors = ["The Starling Project Developers"]
-description = "The project that will henceforth be known as `starling`."
+description = "The Starling JavaScript runtime."
 name = "starling"
 version = "0.1.0"
 [[bin]]
@@ -10,22 +10,25 @@ path = "src/bin/starling.rs"
 required-features = ["clap"]
 
 [dependencies]
-error-chain = "0.10.0"
-futures = "0.1.13"
-tokio-core = "0.1.6"
-
-[dependencies.clap]
-optional = true
-version = "2.26.0"
+derive_is_enum_variant = "0.1.1"
+error-chain = "0.11.0"
+futures = "0.1.15"
+futures-cpupool = "0.1.6"
+num_cpus = "1.6.2"
+tokio-core = "0.1.9"
 
 [dependencies.backtrace]
 features = ["cpp_demangle"]
 version = "0.3.2"
 
+[dependencies.clap]
+optional = true
+version = "2.26.0"
+
 [dependencies.js]
-branch = "smup"
+branch = "smup-smup"
 git = "https://github.com/fitzgen/mozjs"
 
 [features]
+debugmozjs = ["js/debugmozjs"]
 default = ["clap"]
-debugmozjs = ['js/debugmozjs']
