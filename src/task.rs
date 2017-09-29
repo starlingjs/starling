@@ -26,13 +26,17 @@
 
 use super::{Error, ErrorKind, Result, StarlingHandle, StarlingMessage};
 use futures::{self, Async, Future, Sink};
+use futures::sync::mpsc;
 use futures::sync::oneshot;
 use futures_cpupool::CpuFuture;
-use futures::sync::mpsc;
 use js;
+use js::heap::Trace;
 use js::jsapi;
 use js::rust::Runtime as JsRuntime;
+use js_global::GLOBAL_FUNCTIONS;
+use std::cell::RefCell;
 use std::fmt;
+use std::mem;
 use std::os;
 use std::path;
 use std::ptr;
@@ -49,6 +53,100 @@ impl From<TaskId> for thread::ThreadId {
     }
 }
 
+/// Keeps track of unhandled, rejected promises.
+#[derive(Debug, Default)]
+struct RejectedPromisesTracker {
+    unhandled_rejected_promises: Vec<Box<js::heap::Heap<*mut jsapi::JSObject>>>,
+}
+
+impl RejectedPromisesTracker {
+    /// Register a promises tracker with the given runtime.
+    pub fn register(runtime: &JsRuntime, tracker: &RefCell<Self>) {
+        #[allow(unsafe_code)]
+        unsafe {
+            let tracker: *const RefCell<Self> = tracker as _;
+            let tracker = tracker as *mut os::raw::c_void;
+            jsapi::JS::SetPromiseRejectionTrackerCallback(
+                runtime.cx(),
+                Some(Self::promise_rejection_callback),
+                tracker,
+            );
+        }
+    }
+
+    /// Clear the set of unhandled, rejected promises.
+    pub fn clear(&mut self) {
+        self.unhandled_rejected_promises.clear();
+    }
+
+    /// Take this tracker's set of unhandled, rejected promises, leaving an
+    /// empty set in its place.
+    pub fn take(&mut self) -> Vec<Box<js::heap::Heap<*mut jsapi::JSObject>>> {
+        mem::replace(&mut self.unhandled_rejected_promises, vec![])
+    }
+
+    /// The given rejected `promise` has been handled, so remove it from the
+    /// unhandled set.
+    fn handled(&mut self, promise: jsapi::JS::HandleObject) {
+        let idx = self.unhandled_rejected_promises
+            .iter()
+            .position(|p| p.get() == promise.get());
+
+        if let Some(idx) = idx {
+            self.unhandled_rejected_promises.swap_remove(idx);
+        }
+    }
+
+    /// The given rejected `promise` has not been handled, so add it to the
+    /// rejected set if necessary.
+    fn unhandled(&mut self, promise: jsapi::JS::HandleObject) {
+        let idx = self.unhandled_rejected_promises
+            .iter()
+            .position(|p| p.get() == promise.get());
+
+        if let None = idx {
+            // This needs to be performed in two steps because Heap's
+            // post-write barrier relies on the Heap instance having a
+            // stable address.
+            self.unhandled_rejected_promises
+                .push(Box::new(js::heap::Heap::default()));
+            self.unhandled_rejected_promises
+                .last()
+                .unwrap()
+                .set(promise.get());
+        }
+    }
+
+    /// Raw JSAPI callback for observing rejected promise handling.
+    #[allow(unsafe_code)]
+    unsafe extern "C" fn promise_rejection_callback(
+        _cx: *mut jsapi::JSContext,
+        promise: jsapi::JS::HandleObject,
+        state: jsapi::PromiseRejectionHandlingState,
+        data: *mut os::raw::c_void,
+    ) {
+        let tracker: *const RefCell<Self> = data as _;
+        let tracker: &RefCell<Self> = tracker.as_ref().unwrap();
+        let mut tracker = tracker.borrow_mut();
+
+        if state == jsapi::PromiseRejectionHandlingState::Handled {
+            tracker.handled(promise);
+        } else {
+            assert_eq!(state, jsapi::PromiseRejectionHandlingState::Unhandled);
+            tracker.unhandled(promise);
+        }
+    }
+}
+
+#[allow(unsafe_code)]
+unsafe impl Trace for RejectedPromisesTracker {
+    unsafe fn trace(&self, tracer: *mut jsapi::JSTracer) {
+        for promise in &self.unhandled_rejected_promises {
+            promise.trace(tracer);
+        }
+    }
+}
+
 /// A `Task` is a JavaScript execution thread.
 ///
 /// A `Task` is not `Send` nor `Sync`; it must be communicated with via its
@@ -59,23 +157,29 @@ pub(crate) struct Task {
     handle: TaskHandle,
     receiver: mpsc::Receiver<TaskMessage>,
     global: js::heap::Heap<*mut jsapi::JSObject>,
-    runtime: JsRuntime,
+    runtime: Option<JsRuntime>,
     starling: StarlingHandle,
     js_file: path::PathBuf,
     parent: Option<TaskHandle>,
     state: State,
+    rejected_promises: RefCell<RejectedPromisesTracker>,
 }
 
 impl Drop for Task {
     fn drop(&mut self) {
+        self.global.set(ptr::null_mut());
+        self.rejected_promises.borrow_mut().clear();
+
         #[allow(unsafe_code)]
         unsafe {
             jsapi::JS_RemoveExtraGCRootsTracer(
-                self.runtime.cx(),
+                self.runtime().cx(),
                 Some(Self::trace_task_gc_roots),
-                self as *const _ as *mut _
+                self as *const _ as *mut _,
             );
         }
+
+        let _ = self.runtime.take().unwrap();
     }
 }
 
@@ -142,12 +246,12 @@ impl Task {
     }
 
     fn create_main(starling: StarlingHandle, js_file: path::PathBuf) -> Result<Box<Task>> {
-        let runtime = JsRuntime::new().map_err(|_| {
+        let runtime = Some(JsRuntime::new(true).map_err(|_| {
             Error::from_kind(ErrorKind::CouldNotCreateJavaScriptRuntime)
-        })?;
+        })?);
 
-        let (sender, receiver) = mpsc::channel(starling.options().buffer_capacity_for::<TaskMessage>());
-        let global = js::heap::Heap::new(ptr::null_mut());
+        let (sender, receiver) =
+            mpsc::channel(starling.options().buffer_capacity_for::<TaskMessage>());
 
         let task = Box::new(Task {
             handle: TaskHandle {
@@ -155,14 +259,16 @@ impl Task {
                 sender,
             },
             receiver,
-            global,
+            global: js::heap::Heap::default(),
             runtime,
             starling,
             js_file,
             parent: None,
             state: State::Created,
+            rejected_promises: RefCell::new(RejectedPromisesTracker::default()),
         });
 
+        RejectedPromisesTracker::register(task.runtime(), &task.rejected_promises);
         task.create_global();
 
         Ok(task)
@@ -190,12 +296,18 @@ impl Task {
         self.handle.id
     }
 
+    fn runtime(&self) -> &JsRuntime {
+        self.runtime
+            .as_ref()
+            .expect("Task should always have a JS runtime except at the very end of its Drop")
+    }
+
     fn create_global(&self) {
         assert_eq!(self.global.get(), ptr::null_mut());
 
         #[allow(unsafe_code)]
         unsafe {
-            let cx = self.runtime.cx();
+            let cx = self.runtime().cx();
 
             rooted!(in(cx) let global = jsapi::JS_NewGlobalObject(
                 cx,
@@ -207,15 +319,21 @@ impl Task {
             assert!(!global.get().is_null());
             self.global.set(global.get());
 
+            {
+                let _ac = js::ac::AutoCompartment::with_obj(cx, global.get());
+                js::rust::define_methods(cx, global.handle(), &GLOBAL_FUNCTIONS[..])
+                    .expect("should define global functions OK");
+            }
+
             assert!(jsapi::JS_AddExtraGCRootsTracer(
                 cx,
                 Some(Self::trace_task_gc_roots),
-                self as *const _ as *mut _
+                self as *const Task as *mut os::raw::c_void
             ));
         }
     }
 
-    // Notify the SpiderMonkey GC of our additional GC roots.
+    /// Notify the SpiderMonkey GC of our additional GC roots.
     #[allow(unsafe_code)]
     unsafe extern "C" fn trace_task_gc_roots(
         tracer: *mut jsapi::JSTracer,
@@ -224,11 +342,17 @@ impl Task {
         let task = task as *const os::raw::c_void;
         let task = task as *const Task;
         let task = task.as_ref().unwrap();
-        js::glue::CallObjectTracer(
-            tracer,
-            &task.global as *const _ as *mut _,
-            b"starling::Task::global\0".as_ptr() as _,
-        );
+        task.trace(tracer);
+    }
+}
+
+#[allow(unsafe_code)]
+unsafe impl Trace for Task {
+    unsafe fn trace(&self, tracer: *mut jsapi::JSTracer) {
+        self.global.trace(tracer);
+
+        let rejected_promises = self.rejected_promises.borrow();
+        rejected_promises.trace(tracer);
     }
 }
 
@@ -244,8 +368,8 @@ impl Task {
         let js_file_path = self.js_file.clone();
 
         let reading = self.starling.sync_io_pool().spawn_fn(|| {
-            use std::io::Read;
             use std::fs;
+            use std::io::Read;
 
             let mut file = fs::File::open(js_file_path)?;
             let mut contents = String::new();
@@ -257,26 +381,61 @@ impl Task {
         self.poll()
     }
 
-    fn evaluate(&mut self, src: String) -> Result<Async<()>> {
-        let cx = self.runtime.cx();
+    fn evaluate_top_level(&mut self, src: String) -> Result<Async<()>> {
+        let cx = self.runtime().cx();
         rooted!(in(cx) let global = self.global.get());
 
         let filename = self.js_file.display().to_string();
 
+        // Evaluate the JS source.
+
         rooted!(in(cx) let mut rval = js::jsval::UndefinedValue());
-        match self.runtime
-            .evaluate_script(global.handle(), &src, &filename, 1, rval.handle_mut())
-        {
-            Ok(()) => self.notify_starling_finished(),
-            Err(()) => {
-                #[allow(unsafe_code)]
-                unsafe {
-                    // TODO: convert the pending exception into a meaningful error.
-                    jsapi::JS_ClearPendingException(cx);
-                }
-                self.notify_starling_errored(Error::from_kind(ErrorKind::JavaScriptException))
+        let eval_result =
+            self.runtime()
+                .evaluate_script(global.handle(), &src, &filename, 1, rval.handle_mut());
+        if let Err(()) = eval_result {
+            #[allow(unsafe_code)]
+            unsafe {
+                // TODO: convert the pending exception into a meaningful error.
+                jsapi::JS_ClearPendingException(cx);
+
+                jsapi::js::RunJobs(cx);
+            }
+            return self.notify_starling_errored(Error::from_kind(ErrorKind::JavaScriptException));
+        }
+
+        // Drain the micro-task queue.
+
+        #[allow(unsafe_code)]
+        unsafe {
+            jsapi::js::RunJobs(cx);
+
+            if jsapi::JS_IsExceptionPending(cx) {
+                // TODO: convert the pending exception into a meaningful error.
+                jsapi::JS_ClearPendingException(cx);
+                return self.notify_starling_errored(
+                    Error::from_kind(ErrorKind::JavaScriptException)
+                );
             }
         }
+
+        // Check for unhandled, rejected promises.
+
+        let unhandled = {
+            let mut tracker = self.rejected_promises.borrow_mut();
+            tracker.take()
+        };
+
+        if !unhandled.is_empty() {
+            // TODO: collect the rejection values from the promise, and
+            // line/column/etc if the rejection value is some kind of Error
+            // object.
+            return self.notify_starling_errored(Error::from_kind(
+                ErrorKind::JavaScriptUnhandledRejectedPromise,
+            ));
+        }
+
+        self.notify_starling_finished()
     }
 
     fn notify_starling_finished(&mut self) -> Result<Async<()>> {
@@ -330,7 +489,7 @@ enum State {
 }
 
 enum NextState {
-    EvaluateSource(String),
+    EvaluateTopLevel(String),
     NotifyParentFinished,
     NotifyParentErrored(Error),
 }
@@ -346,7 +505,7 @@ impl Future for Task {
             }
             State::ReadingJsModule(ref mut reading) => {
                 let src = try_ready!(reading.poll());
-                NextState::EvaluateSource(src)
+                NextState::EvaluateTopLevel(src)
             }
             State::NotifyStarlingFinished(ref mut notify) => {
                 try_ready!(
@@ -383,7 +542,7 @@ impl Future for Task {
         };
 
         match next_state {
-            NextState::EvaluateSource(src) => self.evaluate(src),
+            NextState::EvaluateTopLevel(src) => self.evaluate_top_level(src),
             NextState::NotifyParentFinished => self.notify_parent_finished(),
             NextState::NotifyParentErrored(e) => self.notify_parent_errored(e),
         }

@@ -1,5 +1,6 @@
 //! The Starling JavaScript runtime.
 //!
+
 // `error_chain!` can recurse deeply
 #![recursion_limit = "1024"]
 #![deny(missing_docs)]
@@ -17,14 +18,17 @@ extern crate futures;
 extern crate futures_cpupool;
 #[macro_use]
 extern crate js;
+#[macro_use]
+extern crate lazy_static;
 extern crate num_cpus;
 extern crate tokio_core;
 
+pub(crate) mod js_global;
 pub(crate) mod task;
 
 use futures::{Sink, Stream};
-use futures_cpupool::CpuPool;
 use futures::sync::mpsc;
+use futures_cpupool::CpuPool;
 use std::cmp;
 use std::collections::HashMap;
 use std::fmt;
@@ -66,6 +70,13 @@ pub enum ErrorKind {
     #[error_chain(description = r#"|| "JavaScript exception""#)]
     #[error_chain(display = r#"|| write!(f, "JavaScript exception")"#)]
     JavaScriptException,
+
+    /// There was an unhandled, rejected JavaScript promise.
+    // TODO: stack, line, column, filename, etc
+    #[error_chain(custom)]
+    #[error_chain(description = r#"|| "Unhandled, rejected JavaScript promise""#)]
+    #[error_chain(display = r#"|| write!(f, "Unhandled, rejected JavaScript promise")"#)]
+    JavaScriptUnhandledRejectedPromise,
 }
 
 impl Clone for Error {
@@ -336,10 +347,7 @@ impl StarlingHandle {
     }
 
     /// Send a message to the Starling supervisory thread.
-    pub fn send(
-        &self,
-        msg: StarlingMessage,
-    ) -> futures::sink::Send<mpsc::Sender<StarlingMessage>> {
+    pub fn send(&self, msg: StarlingMessage) -> futures::sink::Send<mpsc::Sender<StarlingMessage>> {
         self.sender.clone().send(msg)
     }
 }
