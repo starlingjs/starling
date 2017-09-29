@@ -5,7 +5,6 @@
 #![recursion_limit = "1024"]
 #![deny(missing_docs)]
 #![deny(missing_debug_implementations)]
-#![deny(unsafe_code)]
 // Annoying warning emitted from the `error_chain!` macro.
 #![allow(unused_doc_comment)]
 

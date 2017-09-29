@@ -16,7 +16,6 @@ macro_rules! js_native {
     ) => {
         $(
             $( #[$attr] )*
-            #[allow(unsafe_code)]
             extern "C" fn $name( $( $arg_name : $arg_ty , )* ) -> bool {
                 match panic::catch_unwind(move || {
                     $( $body )*

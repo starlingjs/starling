@@ -62,7 +62,6 @@ struct RejectedPromisesTracker {
 impl RejectedPromisesTracker {
     /// Register a promises tracker with the given runtime.
     pub fn register(runtime: &JsRuntime, tracker: &RefCell<Self>) {
-        #[allow(unsafe_code)]
         unsafe {
             let tracker: *const RefCell<Self> = tracker as _;
             let tracker = tracker as *mut os::raw::c_void;
@@ -118,7 +117,6 @@ impl RejectedPromisesTracker {
     }
 
     /// Raw JSAPI callback for observing rejected promise handling.
-    #[allow(unsafe_code)]
     unsafe extern "C" fn promise_rejection_callback(
         _cx: *mut jsapi::JSContext,
         promise: jsapi::JS::HandleObject,
@@ -138,7 +136,6 @@ impl RejectedPromisesTracker {
     }
 }
 
-#[allow(unsafe_code)]
 unsafe impl Trace for RejectedPromisesTracker {
     unsafe fn trace(&self, tracer: *mut jsapi::JSTracer) {
         for promise in &self.unhandled_rejected_promises {
@@ -170,7 +167,6 @@ impl Drop for Task {
         self.global.set(ptr::null_mut());
         self.rejected_promises.borrow_mut().clear();
 
-        #[allow(unsafe_code)]
         unsafe {
             jsapi::JS_RemoveExtraGCRootsTracer(
                 self.runtime().cx(),
@@ -305,7 +301,6 @@ impl Task {
     fn create_global(&self) {
         assert_eq!(self.global.get(), ptr::null_mut());
 
-        #[allow(unsafe_code)]
         unsafe {
             let cx = self.runtime().cx();
 
@@ -334,7 +329,6 @@ impl Task {
     }
 
     /// Notify the SpiderMonkey GC of our additional GC roots.
-    #[allow(unsafe_code)]
     unsafe extern "C" fn trace_task_gc_roots(
         tracer: *mut jsapi::JSTracer,
         task: *mut os::raw::c_void,
@@ -346,7 +340,6 @@ impl Task {
     }
 }
 
-#[allow(unsafe_code)]
 unsafe impl Trace for Task {
     unsafe fn trace(&self, tracer: *mut jsapi::JSTracer) {
         self.global.trace(tracer);
@@ -394,7 +387,6 @@ impl Task {
             self.runtime()
                 .evaluate_script(global.handle(), &src, &filename, 1, rval.handle_mut());
         if let Err(()) = eval_result {
-            #[allow(unsafe_code)]
             unsafe {
                 // TODO: convert the pending exception into a meaningful error.
                 jsapi::JS_ClearPendingException(cx);
@@ -406,7 +398,6 @@ impl Task {
 
         // Drain the micro-task queue.
 
-        #[allow(unsafe_code)]
         unsafe {
             jsapi::js::RunJobs(cx);
 
