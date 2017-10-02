@@ -5,28 +5,31 @@ fn main() {
 }
 
 mod js_tests {
+    use glob::glob;
     use std::env;
     use std::fs::File;
-    use glob::glob;
-    use std::io::{BufReader, BufRead, Write};
+    use std::io::{BufRead, BufReader, Write};
     use std::path::Path;
 
     pub fn generate() {
-        match env::var("PROFILE").expect("should have PROFILE env var").as_ref() {
+        match env::var("PROFILE")
+            .expect("should have PROFILE env var")
+            .as_ref()
+        {
             "debug" => println!("cargo:rustc-env=STARLING_TEST_EXECUTABLE=./target/debug/starling"),
-            "release" => println!("cargo:rustc-env=STARLING_TEST_EXECUTABLE=./target/release/starling"),
+            "release" => {
+                println!("cargo:rustc-env=STARLING_TEST_EXECUTABLE=./target/release/starling")
+            }
             otherwise => panic!("Unknown $PROFILE: '{}'", otherwise),
         }
 
-        let js_files = glob("./tests/js/**/*.js")
-            .expect("should create glob iterator OK");
+        let js_files = glob("./tests/js/**/*.js").expect("should create glob iterator OK");
 
-        let out_dir = env::var_os("OUT_DIR")
-            .expect("should have the OUT_DIR variable");
+        let out_dir = env::var_os("OUT_DIR").expect("should have the OUT_DIR variable");
         let generated_tests_path = Path::new(&out_dir).join("js_tests.rs");
 
-        let mut generated_tests = File::create(generated_tests_path)
-            .expect("should create generated tests file OK");
+        let mut generated_tests =
+            File::create(generated_tests_path).expect("should create generated tests file OK");
 
         for path in js_files {
             let path = path.expect("should have permissions to read globbed files/dirs");
@@ -59,7 +62,7 @@ fn {name}() {{
     #[derive(Default)]
     struct TestOptions {
         //# starling-fail
-        expect_fail: bool
+        expect_fail: bool,
     }
 
     impl TestOptions {
