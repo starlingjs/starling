@@ -3,43 +3,10 @@
 use js::{self, jsapi};
 use std::ffi;
 use std::os::raw;
-use std::panic;
 
-macro_rules! js_native {
-    (
-        $(
-            $( #[$attr:meta] )*
-            fn $name:ident ( $( $arg_name:ident : $arg_ty:ty $(,)* )* ) -> bool {
-                $( $body:tt )*
-            }
-        )*
-    ) => {
-        $(
-            $( #[$attr] )*
-            extern "C" fn $name( $( $arg_name : $arg_ty , )* ) -> bool {
-                match panic::catch_unwind(move || {
-                    $( $body )*
-                }) {
-                    Ok(b) => b,
-                    Err(_) => {
-                        eprintln!(
-                            concat!(
-                                "error: JSNative '",
-                                stringify!($name),
-                                "' panicked: must not panic across FFI boundaries!"
-                            )
-                        );
-                        false
-                    }
-                }
-            }
-        )*
-    }
-}
-
-js_native! {
-    // Print the given arguments to stdout for debugging.
-    fn print(
+js_native_no_panic! {
+    /// Print the given arguments to stdout for debugging.
+    pub fn print(
         cx: *mut jsapi::JSContext,
         argc: raw::c_uint,
         vp: *mut jsapi::JS::Value
