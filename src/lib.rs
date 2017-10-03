@@ -26,6 +26,7 @@ extern crate tokio_core;
 pub mod js_native;
 
 pub(crate) mod js_global;
+pub(crate) mod promise_tracker;
 pub(crate) mod task;
 
 use futures::{Sink, Stream};
