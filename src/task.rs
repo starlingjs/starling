@@ -29,6 +29,7 @@ use futures::{self, Async, Future, Sink};
 use futures::sync::mpsc;
 use futures::sync::oneshot;
 use futures_cpupool::CpuFuture;
+use gc_roots::GcRootSet;
 use js;
 use js::heap::Trace;
 use js::jsapi;
@@ -75,6 +76,7 @@ impl Drop for Task {
     fn drop(&mut self) {
         self.global.set(ptr::null_mut());
         self.rejected_promises.borrow_mut().clear();
+        GcRootSet::uninitialize();
 
         unsafe {
             jsapi::JS_RemoveExtraGCRootsTracer(
@@ -173,6 +175,7 @@ impl Task {
             rejected_promises: RefCell::new(RejectedPromisesTracker::default()),
         });
 
+        GcRootSet::initialize();
         RejectedPromisesTracker::register(task.runtime(), &task.rejected_promises);
         task.create_global();
 
@@ -255,6 +258,10 @@ unsafe impl Trace for Task {
 
         let rejected_promises = self.rejected_promises.borrow();
         rejected_promises.trace(tracer);
+
+        GcRootSet::with_ref(|roots| {
+            roots.trace(tracer);
+        });
     }
 }
 

@@ -25,6 +25,7 @@ extern crate tokio_core;
 #[macro_use]
 pub mod js_native;
 
+pub mod gc_roots;
 pub(crate) mod js_global;
 pub(crate) mod promise_tracker;
 pub(crate) mod task;
