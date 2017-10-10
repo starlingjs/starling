@@ -288,7 +288,7 @@ unsafe impl Trace for Task {
 ///
 /// In general, these methods need to re-call `poll()` so that the newly
 /// transitioned-to state's new future gets registered with the `tokio` reactor
-/// core. If we don't we'll dead lock.
+/// core. If we don't, then we'll dead lock.
 impl Task {
     fn read_js_module(&mut self) -> Result<Async<()>> {
         assert!(self.state.is_created());
