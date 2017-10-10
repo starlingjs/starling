@@ -14,6 +14,14 @@ pub struct RejectedPromisesTracker {
     unhandled_rejected_promises: Vec<Box<js::heap::Heap<*mut jsapi::JSObject>>>,
 }
 
+unsafe impl Trace for RejectedPromisesTracker {
+    unsafe fn trace(&self, tracer: *mut jsapi::JSTracer) {
+        for promise in &self.unhandled_rejected_promises {
+            promise.trace(tracer);
+        }
+    }
+}
+
 impl RejectedPromisesTracker {
     /// Register a promises tracker with the given runtime.
     pub fn register(runtime: &JsRuntime, tracker: &RefCell<Self>) {
@@ -87,14 +95,6 @@ impl RejectedPromisesTracker {
         } else {
             assert_eq!(state, jsapi::PromiseRejectionHandlingState::Unhandled);
             tracker.unhandled(promise);
-        }
-    }
-}
-
-unsafe impl Trace for RejectedPromisesTracker {
-    unsafe fn trace(&self, tracer: *mut jsapi::JSTracer) {
-        for promise in &self.unhandled_rejected_promises {
-            promise.trace(tracer);
         }
     }
 }
