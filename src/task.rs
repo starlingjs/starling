@@ -42,6 +42,7 @@ use std::os;
 use std::path;
 use std::ptr;
 use std::thread;
+use tokio_core;
 use tokio_core::reactor::Core as TokioCore;
 
 /// A unique identifier for some `Task`.
@@ -52,6 +53,19 @@ impl From<TaskId> for thread::ThreadId {
     fn from(task_id: TaskId) -> Self {
         task_id.0
     }
+}
+
+thread_local! {
+    static EVENT_LOOP: RefCell<Option<tokio_core::reactor::Handle>> = RefCell::new(None);
+}
+
+/// Get a handle to this thread's `tokio` event loop.
+pub fn event_loop() -> tokio_core::reactor::Handle {
+    EVENT_LOOP.with(|el| {
+        el.borrow()
+            .clone()
+            .expect("called `task::event_loop` before initializing thread's event loop")
+    })
 }
 
 /// A `Task` is a JavaScript execution thread.
@@ -115,6 +129,11 @@ impl Task {
             let result = TokioCore::new()
                 .map_err(|e| e.into())
                 .and_then(|event_loop| {
+                    EVENT_LOOP.with(|el| {
+                        let mut el = el.borrow_mut();
+                        *el = Some(event_loop.handle());
+                    });
+
                     Self::create_main(starling2, js_file).map(|task| (event_loop, task))
                 });
 
