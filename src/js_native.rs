@@ -125,6 +125,7 @@ macro_rules! js_native {
                             Ok(js::conversions::ConversionResult::Success(x)) => x,
                         };
                     )*
+                    let _ = i;
 
                     // Call the function and then convert the return type into a
                     // JS value.
