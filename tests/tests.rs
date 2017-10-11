@@ -20,12 +20,11 @@ where
 
     let was_success = output.status.success();
 
-    assert_eq!(
-        expect_success,
-        was_success,
-        "should have expected exit status for {}",
-        path
-    );
+    if expect_success {
+        assert!(was_success, "should exit OK: {}", path);
+    } else {
+        assert!(!was_success, "should fail: {}", path);
+    }
 
     for s in stdout_has {
         assert!(
