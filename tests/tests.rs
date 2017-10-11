@@ -16,7 +16,7 @@ where
     let output = Command::new(env!("STARLING_TEST_EXECUTABLE"))
         .arg(&path)
         .output()
-        .expect("Should spawn `cargo run` OK");
+        .expect("Should spawn `starling` OK");
 
     let was_success = output.status.success();
 
