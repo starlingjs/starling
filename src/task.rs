@@ -88,6 +88,10 @@ pub(crate) struct Task {
 
 impl Drop for Task {
     fn drop(&mut self) {
+        unsafe {
+            jsapi::JS_LeaveCompartment(self.runtime().cx(), ptr::null_mut());
+        }
+
         self.global.set(ptr::null_mut());
         self.rejected_promises.borrow_mut().clear();
         GcRootSet::uninitialize();
@@ -244,12 +248,10 @@ impl Task {
             ));
             assert!(!global.get().is_null());
             self.global.set(global.get());
+            jsapi::JS_EnterCompartment(cx, self.global.get());
 
-            {
-                let _ac = js::ac::AutoCompartment::with_obj(cx, global.get());
-                js::rust::define_methods(cx, global.handle(), &GLOBAL_FUNCTIONS[..])
-                    .expect("should define global functions OK");
-            }
+            js::rust::define_methods(cx, global.handle(), &GLOBAL_FUNCTIONS[..])
+                .expect("should define global functions OK");
 
             assert!(jsapi::JS_AddExtraGCRootsTracer(
                 cx,
