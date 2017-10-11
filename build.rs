@@ -43,7 +43,11 @@ mod js_tests {
                 r###"
 #[test]
 fn {name}() {{
-    assert_starling_run_file("{path}", {expect_success});
+    assert_starling_run_file(
+        "{path}",
+        {expect_success},
+        &{stdout_has:?},
+    );
 }}
                 "###,
                 name = path.display()
@@ -56,6 +60,7 @@ fn {name}() {{
                     .collect::<String>(),
                 path = path.display(),
                 expect_success = !opts.expect_fail,
+                stdout_has = opts.stdout_has
             ).expect("should write to generated js tests file OK");
         }
     }
@@ -64,6 +69,9 @@ fn {name}() {{
     struct TestOptions {
         //# starling-fail
         expect_fail: bool,
+
+        //# starling-stdout-has: ...
+        stdout_has: Vec<String>,
     }
 
     impl TestOptions {
@@ -78,6 +86,11 @@ fn {name}() {{
                 if line.starts_with("//# starling") {
                     if line == "//# starling-fail" {
                         opts.expect_fail = true;
+                    } else if line.starts_with("//# starling-stdout-has:") {
+                        let expected: String = line.chars()
+                            .skip("//# starling-stdout-has:".len())
+                            .collect();
+                        opts.stdout_has.push(expected.trim().into());
                     } else {
                         panic!("Unknown pragma: '{}'", line);
                     }
