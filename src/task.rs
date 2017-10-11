@@ -29,12 +29,14 @@ use futures::{self, Async, Future, Sink};
 use futures::sync::mpsc;
 use futures::sync::oneshot;
 use futures_cpupool::CpuFuture;
-use gc_roots::GcRootSet;
+use gc_roots::{GcRoot, GcRootSet};
 use js;
 use js::heap::Trace;
 use js::jsapi;
+use js::jsval;
 use js::rust::Runtime as JsRuntime;
 use js_global::GLOBAL_FUNCTIONS;
+use promise_future_glue::{promise_to_future, Promise2Future};
 use promise_tracker::RejectedPromisesTracker;
 use std::cell::RefCell;
 use std::fmt;
@@ -311,6 +313,22 @@ impl Task {
         self.poll()
     }
 
+    // Check for unhandled, rejected promises and return an error if any exist.
+    fn check_for_unhandled_rejected_promises(&mut self) -> Result<()> {
+        let unhandled = {
+            let mut tracker = self.rejected_promises.borrow_mut();
+            tracker.take()
+        };
+        if !unhandled.is_empty() {
+            // TODO: collect the rejection values from the promise, and
+            // line/column/etc if the rejection value is some kind of Error
+            // object.
+            let err = ErrorKind::JavaScriptUnhandledRejectedPromise;
+            return Err(err.into());
+        }
+        Ok(())
+    }
+
     fn evaluate_top_level(&mut self, src: String) -> Result<Async<()>> {
         let cx = self.runtime().cx();
         rooted!(in(cx) let global = self.global.get());
@@ -319,7 +337,7 @@ impl Task {
 
         // Evaluate the JS source.
 
-        rooted!(in(cx) let mut rval = js::jsval::UndefinedValue());
+        rooted!(in(cx) let mut rval = jsval::UndefinedValue());
         let eval_result =
             self.runtime()
                 .evaluate_script(global.handle(), &src, &filename, 1, rval.handle_mut());
@@ -333,37 +351,76 @@ impl Task {
             return self.notify_starling_errored(Error::from_kind(ErrorKind::JavaScriptException));
         }
 
-        // Drain the micro-task queue.
-
         unsafe {
             jsapi::js::RunJobs(cx);
+        }
 
-            if jsapi::JS_IsExceptionPending(cx) {
+        if let Err(e) = self.check_for_unhandled_rejected_promises() {
+            return self.notify_starling_errored(e);
+        }
+
+        self.evaluate_main()
+    }
+
+    fn evaluate_main(&mut self) -> Result<Async<()>> {
+        let cx = self.runtime().cx();
+        rooted!(in(cx) let global = self.global.get());
+
+        let mut has_main = false;
+        unsafe {
+            assert!(jsapi::JS_HasProperty(
+                cx,
+                global.handle(),
+                b"main\0".as_ptr() as _,
+                &mut has_main
+            ));
+        }
+        if !has_main {
+            return self.notify_starling_finished();
+        }
+
+        rooted!(in(cx) let mut rval = jsval::UndefinedValue());
+        let args = jsapi::JS::HandleValueArray::new();
+        unsafe {
+            let ok = jsapi::JS_CallFunctionName(
+                cx,
+                global.handle(),
+                b"main\0".as_ptr() as _,
+                &args,
+                rval.handle_mut()
+            );
+
+            if !ok {
+                debug_assert!(jsapi::JS_IsExceptionPending(cx));
                 // TODO: convert the pending exception into a meaningful error.
                 jsapi::JS_ClearPendingException(cx);
+                jsapi::js::RunJobs(cx);
                 return self.notify_starling_errored(
                     Error::from_kind(ErrorKind::JavaScriptException)
                 );
             }
+
+            jsapi::js::RunJobs(cx);
         }
 
-        // Check for unhandled, rejected promises.
-
-        let unhandled = {
-            let mut tracker = self.rejected_promises.borrow_mut();
-            tracker.take()
-        };
-
-        if !unhandled.is_empty() {
-            // TODO: collect the rejection values from the promise, and
-            // line/column/etc if the rejection value is some kind of Error
-            // object.
-            return self.notify_starling_errored(Error::from_kind(
-                ErrorKind::JavaScriptUnhandledRejectedPromise,
-            ));
+        if let Err(e) = self.check_for_unhandled_rejected_promises() {
+            return self.notify_starling_errored(e);
         }
 
-        self.notify_starling_finished()
+        rooted!(in(cx) let mut obj = ptr::null_mut());
+        if unsafe {
+            rval.get().is_object() && {
+                obj.set(rval.get().to_object());
+                jsapi::JS::IsPromiseObject(obj.handle())
+            }
+        } {
+            let obj = GcRoot::new(obj.get());
+            let future = promise_to_future(&obj);
+            self.state = State::WaitingOnPromise(future);
+            self.poll()
+        } else {
+            self.notify_starling_finished()
+        }
     }
 
     fn notify_starling_finished(&mut self) -> Result<Async<()>> {
@@ -408,6 +465,7 @@ impl Task {
 enum State {
     Created,
     ReadingJsModule(CpuFuture<String, Error>),
+    WaitingOnPromise(Promise2Future<jsapi::JS::HandleValue, jsapi::JS::HandleValue>),
 
     NotifyStarlingFinished(futures::sink::Send<mpsc::Sender<StarlingMessage>>),
     NotifyParentFinished(futures::sink::Send<mpsc::Sender<TaskMessage>>),
@@ -418,6 +476,8 @@ enum State {
 
 enum NextState {
     EvaluateTopLevel(String),
+    NotifyStarlingFinished,
+    NotifyStarlingErrored(Error),
     NotifyParentFinished,
     NotifyParentErrored(Error),
 }
@@ -434,6 +494,18 @@ impl Future for Task {
             State::ReadingJsModule(ref mut reading) => {
                 let src = try_ready!(reading.poll());
                 NextState::EvaluateTopLevel(src)
+            }
+            State::WaitingOnPromise(ref mut promise) => {
+                match try_ready!(promise.poll()) {
+                    Err(_rejection) => {
+                        let err = ErrorKind::JavaScriptUnhandledRejectedPromise;
+                        let err = err.into();
+                        NextState::NotifyStarlingErrored(err)
+                    }
+                    Ok(_resolution) => {
+                        NextState::NotifyStarlingFinished
+                    }
+                }
             }
             State::NotifyStarlingFinished(ref mut notify) => {
                 try_ready!(
@@ -471,6 +543,8 @@ impl Future for Task {
 
         match next_state {
             NextState::EvaluateTopLevel(src) => self.evaluate_top_level(src),
+            NextState::NotifyStarlingFinished => self.notify_starling_finished(),
+            NextState::NotifyStarlingErrored(e) => self.notify_starling_errored(e),
             NextState::NotifyParentFinished => self.notify_parent_finished(),
             NextState::NotifyParentErrored(e) => self.notify_parent_errored(e),
         }

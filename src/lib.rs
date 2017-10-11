@@ -21,6 +21,7 @@ extern crate js;
 extern crate lazy_static;
 extern crate num_cpus;
 extern crate tokio_core;
+extern crate tokio_timer;
 
 #[macro_use]
 pub mod js_native;

@@ -21,6 +21,7 @@ futures-cpupool = "0.1.6"
 lazy_static = "0.2.8"
 num_cpus = "1.6.2"
 tokio-core = "0.1.9"
+tokio-timer = "0.1.2"
 
 [dependencies.backtrace]
 features = ["cpp_demangle"]
@@ -37,3 +38,9 @@ git = "https://github.com/fitzgen/mozjs"
 [features]
 debugmozjs = ["js/debugmozjs"]
 default = ["clap"]
+
+[patch.crates-io]
+# If you need to temporarily test Starling with a local fork of some upstream
+# crate, add that here. Use the form:
+#
+#     <crate> = { path = "/path/to/local/checkout" }

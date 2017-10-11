@@ -1,8 +1,13 @@
 //! Definitions related to a task's JavaScript global object.
 
-use js::{self, jsapi};
+use futures::Future;
+use js;
+use js::jsapi;
+use promise_future_glue::future_to_promise;
 use std::ffi;
 use std::os::raw;
+use std::time::Duration;
+use tokio_timer::Timer;
 
 js_native_no_panic! {
     /// Print the given arguments to stdout for debugging.
@@ -48,12 +53,32 @@ js_native_no_panic! {
     }
 }
 
+js_native! {
+    fn timeout(
+        millis: js::conversions::EnforceRange<u64>
+    ) -> *mut js::jsapi::JSObject {
+        let timer = Timer::default();
+        let duration = Duration::from_millis(millis.0);
+        let future = timer.sleep(duration).map_err(|e| e.to_string());
+        let promise = future_to_promise(future);
+        unsafe {
+            promise.raw()
+        }
+    }
+}
+
 lazy_static! {
-    pub static ref GLOBAL_FUNCTIONS: [jsapi::JSFunctionSpec; 2] = [
+    pub static ref GLOBAL_FUNCTIONS: [jsapi::JSFunctionSpec; 3] = [
         jsapi::JSFunctionSpec::js_fn(
             b"print\0".as_ptr() as *const _,
             Some(print),
             0,
+            0
+        ),
+        jsapi::JSFunctionSpec::js_fn(
+            b"timeout\0".as_ptr() as *const _,
+            Some(timeout::js_native),
+            2,
             0
         ),
         jsapi::JSFunctionSpec::NULL
