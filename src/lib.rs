@@ -22,6 +22,9 @@ extern crate lazy_static;
 extern crate num_cpus;
 extern crate tokio_core;
 
+#[macro_use]
+pub mod js_native;
+
 pub(crate) mod js_global;
 pub(crate) mod task;
 

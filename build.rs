@@ -31,6 +31,7 @@ mod js_tests {
         let mut generated_tests =
             File::create(generated_tests_path).expect("should create generated tests file OK");
 
+        println!("cargo:rerun-if-changed=./tests/js/");
         for path in js_files {
             let path = path.expect("should have permissions to read globbed files/dirs");
             println!("cargo:rerun-if-changed={}", path.display());
