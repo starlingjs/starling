@@ -286,7 +286,7 @@ where
 /// or `E` will cause the resulting future's `poll` to return an error.
 ///
 /// If the promise object is reclaimed by the garbage collector without being
-/// resolved nor rejected, then the resulting future's `poll` will return an
+/// resolved or rejected, then the resulting future's `poll` will return an
 /// error of kind `ErrorKind::JavaScriptPromiseCollectedWithoutSettling`.
 pub fn promise_to_future<T, E>(
     promise: &GcRoot<*mut jsapi::JSObject>
