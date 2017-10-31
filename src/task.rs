@@ -320,7 +320,7 @@ impl Task {
             tracker.take()
         };
         if !unhandled.is_empty() {
-            // TODO: collect the rejection values from the promise, and
+            // TODO: collect the rejection value from the promise, and
             // line/column/etc if the rejection value is some kind of Error
             // object.
             let err = ErrorKind::JavaScriptUnhandledRejectedPromise;
