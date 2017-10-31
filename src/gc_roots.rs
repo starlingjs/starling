@@ -31,7 +31,7 @@ unsafe impl Trace for GcRootSet {
             if let Some(inner) = entry.upgrade() {
                 let inner = inner.ptr.borrow();
                 let inner = inner.as_ref().expect(
-                    "should not have lobotomized while GcRootSet is initialized"
+                    "should not have severed while GcRootSet is initialized"
                 );
                 inner.trace(tracer);
                 true
@@ -133,18 +133,18 @@ impl GcRootSet {
                 // loop. Spawning a future gives up ownership of it, and we
                 // can't ensure that its lifetime is contained within the JS
                 // task's lifetime. This makes the stronger invariant impossible
-                // to maintain. Instead, we add the ability "lobotomize"
-                // outstanding GC roots by setting the `GcRootInner::ptr` to
-                // `None` and drops the wrapped `js::heap::Heap`. Note that we
-                // have to make sure all `js::heap::Heap`s *do* maintain the
-                // stronger invariant, because their write barriers are fired
-                // upon destruction, which would lead to UAF if we didn't
-                // maintain the stronger invariant for them.
+                // to maintain. Instead, we add the ability "sever" outstanding
+                // GC roots by setting the `GcRootInner::ptr` to `None` and
+                // drops the wrapped `js::heap::Heap`. Note that we have to make
+                // sure all `js::heap::Heap`s *do* maintain the stronger
+                // invariant, because their write barriers are fired upon
+                // destruction, which would lead to UAF if we didn't maintain
+                // the stronger invariant for them.
 
                 let objects = roots.objects.borrow();
                 for entry in &*objects {
                     if let Some(entry) = entry.upgrade() {
-                        entry.lobotomize();
+                        entry.sever();
                     }
                 }
             }
@@ -195,7 +195,7 @@ impl<T> GcRootInner<T>
     T: GcRootable,
 {
     // See `GcRootSet::uninitialize` for details.
-    fn lobotomize(&self) {
+    fn sever(&self) {
         let mut ptr = self.ptr.borrow_mut();
         *ptr = None;
     }
@@ -252,7 +252,7 @@ where
     pub fn borrow(&self) -> Ref<Heap<T>> {
         Ref::map(
             self.inner.ptr.borrow(),
-            |r| r.as_ref().expect("should not be lobotomized")
+            |r| r.as_ref().expect("should not be severed")
         )
     }
 
