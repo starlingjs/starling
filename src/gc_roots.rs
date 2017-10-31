@@ -266,7 +266,7 @@ where
     /// // Given we have some `GcRoot`,
     /// let some_gc_root: GcRoot<*mut jsapi::JSObject> = ...;
     ///
-    /// // We can convert it into a `JS::Rooted` so we can creat `JS::Handle`s
+    /// // We can convert it into a `JS::Rooted` so we can create `JS::Handle`s
     /// // and `JS::MutableHandle`s.
     /// rooted!(in(cx) let rooted = unsafe { some_gc_root.raw() });
     /// ```
