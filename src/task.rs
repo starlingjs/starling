@@ -395,6 +395,10 @@ impl Task {
                     // TODO: convert the pending exception into a meaningful error.
                     jsapi::JS_ClearPendingException(cx);
                 }
+
+                // TODO: It isn't obvious that we should drain the micro-task
+                // queue here. But it also isn't obvious that we shouldn't.
+                // Let's investigate this sometime in the future.
                 jsapi::js::RunJobs(cx);
                 return self.notify_starling_errored(
                     Error::from_kind(ErrorKind::JavaScriptException)
