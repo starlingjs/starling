@@ -413,12 +413,15 @@ impl Task {
         }
 
         rooted!(in(cx) let mut obj = ptr::null_mut());
-        if unsafe {
-            rval.get().is_object() && {
-                obj.set(rval.get().to_object());
+
+        let mut is_promise = false;
+        if rval.get().is_object() {
+            obj.set(rval.get().to_object());
+            is_promise = unsafe {
                 jsapi::JS::IsPromiseObject(obj.handle())
-            }
-        } {
+            };
+        }
+        if is_promise {
             let obj = GcRoot::new(obj.get());
             let future = promise_to_future(&obj);
             self.state = State::WaitingOnPromise(future);
