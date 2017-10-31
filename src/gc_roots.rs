@@ -136,8 +136,8 @@ impl GcRootSet {
                 // task's lifetime. This makes the stronger invariant impossible
                 // to maintain. Instead, we add the ability "sever" outstanding
                 // GC roots by setting the `GcRootInner::ptr` to `None` and
-                // drops the wrapped `js::heap::Heap`. Note that we have to make
-                // sure all `js::heap::Heap`s *do* maintain the stronger
+                // dropping the wrapped `js::heap::Heap`. Note that we have to
+                // make sure all `js::heap::Heap`s *do* maintain the stronger
                 // invariant, because their write barriers are fired upon
                 // destruction, which would lead to UAF if we didn't maintain
                 // the stronger invariant for them.
