@@ -391,9 +391,10 @@ impl Task {
             );
 
             if !ok {
-                debug_assert!(jsapi::JS_IsExceptionPending(cx));
-                // TODO: convert the pending exception into a meaningful error.
-                jsapi::JS_ClearPendingException(cx);
+                if jsapi::JS_IsExceptionPending(cx) {
+                    // TODO: convert the pending exception into a meaningful error.
+                    jsapi::JS_ClearPendingException(cx);
+                }
                 jsapi::js::RunJobs(cx);
                 return self.notify_starling_errored(
                     Error::from_kind(ErrorKind::JavaScriptException)

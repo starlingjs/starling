@@ -302,8 +302,9 @@ where
         let on_resolve = make_js_fn(move |cx, args| {
             match T::from_jsval(cx, args.get(0), ()) {
                 Err(()) => {
-                    debug_assert!(jsapi::JS_IsExceptionPending(cx));
-                    jsapi::JS_ClearPendingException(cx);
+                    if jsapi::JS_IsExceptionPending(cx) {
+                        jsapi::JS_ClearPendingException(cx);
+                    }
                     // TODO: actually collect error information
                     let err = Err(ErrorKind::JavaScriptException.into());
                     let _ = resolve_sender.send(err);
@@ -323,8 +324,9 @@ where
         let on_reject = make_js_fn(move |cx, args| {
             match E::from_jsval(cx, args.get(0), ()) {
                 Err(()) => {
-                    debug_assert!(jsapi::JS_IsExceptionPending(cx));
-                    jsapi::JS_ClearPendingException(cx);
+                    if jsapi::JS_IsExceptionPending(cx) {
+                        jsapi::JS_ClearPendingException(cx);
+                    }
                     // TODO: actually collect error information
                     let err = Err(ErrorKind::JavaScriptException.into());
                     let _ = reject_sender.send(err);
