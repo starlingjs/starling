@@ -174,7 +174,6 @@ where
 }
 
 const CLOSURE_SLOT: usize = 0;
-const UNUSED_SLOT: usize = 1;
 
 // JSNative that forwards the call `f`.
 unsafe extern "C" fn trampoline<F>(
@@ -225,9 +224,6 @@ where
     let private = Box::new(f);
     let private = jsval::PrivateValue(Box::into_raw(private) as *const _);
     jsapi::js::SetFunctionNativeReserved(func.get() as *mut _, CLOSURE_SLOT, &private);
-
-    let undef = jsval::UndefinedValue();
-    jsapi::js::SetFunctionNativeReserved(func.get() as *mut _, UNUSED_SLOT, &undef);
 
     GcRoot::new(func.get() as *mut jsapi::JSObject)
 }
