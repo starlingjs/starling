@@ -282,8 +282,8 @@ where
 /// The resulting future is of either an `Ok(T)` if the promise gets resolved,
 /// or an `Err(E)` if the promise is rejected.
 ///
-/// Failure to conver the resolution or rejection JavaScript value into a `T` or
-/// `E` will cause the resulting future's `poll` to return an error.
+/// Failure to convert the resolution or rejection JavaScript value into a `T`
+/// or `E` will cause the resulting future's `poll` to return an error.
 ///
 /// If the promise object is reclaimed by the garbage collector without being
 /// resolved nor rejected, then the resulting future's `poll` will return an
