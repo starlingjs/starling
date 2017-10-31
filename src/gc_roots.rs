@@ -64,7 +64,8 @@ impl GcRootSet {
         })
     }
 
-    /// Gain mutable access to the current task's set `Future2Promise` GC roots.
+    /// Gain mutable access to the current task's set of `Future2Promise` GC
+    /// roots.
     ///
     /// This is _not_ reentrant! Do not call into JS or do anything that might
     /// GC within this function.
