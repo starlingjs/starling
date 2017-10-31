@@ -4,7 +4,8 @@
 // it will never execute and throw.
 
 async function main() {
-  // No await.
+  // No await. We want to test that the event loop stops getting pumped after
+  // the `main` function exits.
   timeout(1).then(_ => {
     throw new Error();
   });
