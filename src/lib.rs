@@ -21,11 +21,15 @@ extern crate js;
 extern crate lazy_static;
 extern crate num_cpus;
 extern crate tokio_core;
+extern crate tokio_timer;
 
 #[macro_use]
 pub mod js_native;
 
+pub mod gc_roots;
 pub(crate) mod js_global;
+pub mod promise_future_glue;
+pub(crate) mod promise_tracker;
 pub(crate) mod task;
 
 use futures::{Sink, Stream};
@@ -79,6 +83,14 @@ pub enum ErrorKind {
     #[error_chain(description = r#"|| "Unhandled, rejected JavaScript promise""#)]
     #[error_chain(display = r#"|| write!(f, "Unhandled, rejected JavaScript promise")"#)]
     JavaScriptUnhandledRejectedPromise,
+
+    /// The JavaScript `Promise` that was going to settle this future was
+    /// reclaimed by the garbage collector without having been resolved or
+    /// rejected.
+    #[error_chain(custom)]
+    #[error_chain(description = r#"|| "JavaScript Promise collected without settling""#)]
+    #[error_chain(display = r#"|| write!(f, "JavaScript Promise collected without settling")"#)]
+    JavaScriptPromiseCollectedWithoutSettling,
 }
 
 impl Clone for Error {

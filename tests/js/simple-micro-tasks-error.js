@@ -1,4 +1,11 @@
 //# starling-fail
+//# starling-stdout-has: 1
+//# starling-stdout-has: 2
+//# starling-stdout-has: 3
+//# starling-stdout-has: 4
+//# starling-stdout-has: 5
+//# starling-stdout-has: 6
+//# starling-stdout-has: 7
 
 print("1");
 
