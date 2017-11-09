@@ -3,10 +3,14 @@
 use futures::Future;
 use js;
 use js::jsapi;
+use js::rust::Runtime as JsRuntime;
 use promise_future_glue::future_to_promise;
 use std::ffi;
 use std::os::raw;
+use std::path;
+use std::ptr;
 use std::time::Duration;
+use task;
 use tokio_timer::Timer;
 
 js_native_no_panic! {
@@ -67,8 +71,36 @@ js_native! {
     }
 }
 
+js_native! {
+    fn spawn(
+        js_file: String
+    ) -> *mut js::jsapi::JSObject {
+        let mut file = task::this_js_file();
+        file.pop();
+        file.push(path::Path::new(&js_file));
+
+        let starling = task::starling_handle();
+        match task::Task::spawn_child(starling, file) {
+            Ok(child) => {
+                unsafe {
+                    child.raw()
+                }
+            }
+            Err(_) => {
+                unsafe {
+                    js::glue::ReportError(
+                        JsRuntime::get(),
+                        b"failed to spawn new task\0" as *const u8 as *const _
+                    );
+                }
+                ptr::null_mut()
+            }
+        }
+    }
+}
+
 lazy_static! {
-    pub static ref GLOBAL_FUNCTIONS: [jsapi::JSFunctionSpec; 3] = [
+    pub static ref GLOBAL_FUNCTIONS: [jsapi::JSFunctionSpec; 4] = [
         jsapi::JSFunctionSpec::js_fn(
             b"print\0".as_ptr() as *const _,
             Some(print),
@@ -78,7 +110,13 @@ lazy_static! {
         jsapi::JSFunctionSpec::js_fn(
             b"timeout\0".as_ptr() as *const _,
             Some(timeout::js_native),
-            2,
+            1,
+            0
+        ),
+        jsapi::JSFunctionSpec::js_fn(
+            b"spawn\0".as_ptr() as *const _,
+            Some(spawn::js_native),
+            1,
             0
         ),
         jsapi::JSFunctionSpec::NULL

@@ -25,7 +25,8 @@
 //! [ongoing]: https://bugzilla.mozilla.org/show_bug.cgi?id=1323066
 
 use super::{Error, ErrorKind, Result, StarlingHandle, StarlingMessage};
-use futures::{self, Async, Future, Sink};
+use future_ext::FutureExt;
+use futures::{self, Async, Future, Sink, Stream};
 use futures::sync::mpsc;
 use futures::sync::oneshot;
 use futures_cpupool::CpuFuture;
@@ -36,9 +37,10 @@ use js::jsapi;
 use js::jsval;
 use js::rust::Runtime as JsRuntime;
 use js_global::GLOBAL_FUNCTIONS;
-use promise_future_glue::{promise_to_future, Promise2Future};
+use promise_future_glue::{future_to_promise, promise_to_future, Promise2Future};
 use promise_tracker::RejectedPromisesTracker;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt;
 use std::os;
 use std::path;
@@ -58,7 +60,49 @@ impl From<TaskId> for thread::ThreadId {
 }
 
 thread_local! {
+    static THIS_JS_FILE: RefCell<Option<path::PathBuf>> = RefCell::new(None);
+    static STARLING: RefCell<Option<StarlingHandle>> = RefCell::new(None);
+    static THIS_TASK: RefCell<Option<TaskHandle>> = RefCell::new(None);
+    static REJECTED_PROMISES: RefCell<RejectedPromisesTracker> = RefCell::new(Default::default());
+
     static EVENT_LOOP: RefCell<Option<tokio_core::reactor::Handle>> = RefCell::new(None);
+
+    static CHILDREN: RefCell<HashMap<
+        TaskId,
+        (TaskHandle, oneshot::Sender<Result<()>>)
+    >> = {
+        RefCell::new(HashMap::new())
+    };
+}
+
+/// Get a handle to this thread's task's starling supervisor.
+pub(crate) fn starling_handle() -> StarlingHandle {
+    STARLING.with(|starling| {
+        starling
+            .borrow()
+            .clone()
+            .expect("called `task::starling_handle` before creating thread's task")
+    })
+}
+
+/// Get a handle to this thread's task.
+pub(crate) fn this_task() -> TaskHandle {
+    THIS_TASK.with(|this_task| {
+        this_task
+            .borrow()
+            .clone()
+            .expect("called `task::this_task` before creating thread's task")
+    })
+}
+
+/// Get the JS file that this thread's task was spawned to evaluate.
+pub(crate) fn this_js_file() -> path::PathBuf {
+    THIS_JS_FILE.with(|this_js_file| {
+        this_js_file
+            .borrow()
+            .clone()
+            .expect("called `task::this_js_file` before creating thread's task")
+    })
 }
 
 /// Get a handle to this thread's `tokio` event loop.
@@ -68,6 +112,29 @@ pub fn event_loop() -> tokio_core::reactor::Handle {
             .clone()
             .expect("called `task::event_loop` before initializing thread's event loop")
     })
+}
+
+/// Check for unhandled, rejected promises and return an error if any exist.
+pub(crate) fn check_for_unhandled_rejected_promises() -> Result<()> {
+    let unhandled = REJECTED_PROMISES.with(|tracker| tracker.borrow_mut().take());
+    if !unhandled.is_empty() {
+        // TODO: collect the rejection values from each of the promises, and
+        // line/column/etc if the rejection value is some kind of Error object.
+        let err = ErrorKind::JavaScriptUnhandledRejectedPromise;
+        return Err(err.into());
+    }
+    Ok(())
+}
+
+/// Drain the micro-task queue and then check for unhandled rejected
+/// promises. It is the caller's responsibility to ensure that any error
+/// propagates along the task hierarchy correctly.
+pub(crate) fn drain_micro_task_queue() -> Result<()> {
+    let cx = JsRuntime::get();
+    unsafe {
+        jsapi::js::RunJobs(cx);
+    }
+    check_for_unhandled_rejected_promises()
 }
 
 /// A `Task` is a JavaScript execution thread.
@@ -85,7 +152,6 @@ pub(crate) struct Task {
     js_file: path::PathBuf,
     parent: Option<TaskHandle>,
     state: State,
-    rejected_promises: RefCell<RejectedPromisesTracker>,
 }
 
 impl Drop for Task {
@@ -95,7 +161,9 @@ impl Drop for Task {
         }
 
         self.global.set(ptr::null_mut());
-        self.rejected_promises.borrow_mut().clear();
+        REJECTED_PROMISES.with(|rejected_promises| {
+            rejected_promises.borrow_mut().clear();
+        });
         GcRootSet::uninitialize();
 
         unsafe {
@@ -137,6 +205,7 @@ impl Task {
                 .and_then(|event_loop| {
                     EVENT_LOOP.with(|el| {
                         let mut el = el.borrow_mut();
+                        assert!(el.is_none());
                         *el = Some(event_loop.handle());
                     });
 
@@ -177,45 +246,154 @@ impl Task {
         Ok((task_handle, join_handle))
     }
 
-    fn create_main(starling: StarlingHandle, js_file: path::PathBuf) -> Result<Box<Task>> {
-        let runtime = Some(JsRuntime::new(true).map_err(|_| {
-            Error::from_kind(ErrorKind::CouldNotCreateJavaScriptRuntime)
-        })?);
-
-        let (sender, receiver) =
-            mpsc::channel(starling.options().buffer_capacity_for::<TaskMessage>());
-
-        let task = Box::new(Task {
-            handle: TaskHandle {
-                id: TaskId(thread::current().id()),
-                sender,
-            },
-            receiver,
-            global: js::heap::Heap::default(),
-            runtime,
-            starling,
-            js_file,
-            parent: None,
-            state: State::Created,
-            rejected_promises: RefCell::new(RejectedPromisesTracker::default()),
-        });
-
-        GcRootSet::initialize();
-        RejectedPromisesTracker::register(task.runtime(), &task.rejected_promises);
-        task.create_global();
-
-        Ok(task)
-    }
-
     /// Create a new child task.
     ///
     /// The child task's lifetime is constrained within its parent task's
     /// lifetime. When the parent task terminates, the child is terminated as
     /// well.
-    pub fn create_child(starling: StarlingHandle, parent: TaskHandle) -> Result<TaskHandle> {
-        let _ = starling;
-        let _ = parent;
-        unimplemented!()
+    ///
+    /// May only be called from a parent task.
+    ///
+    /// Returns a Promise object that is resolved or rejected when the child
+    /// task finishes cleanly or with an error respectively.
+    pub fn spawn_child(
+        starling: StarlingHandle,
+        js_file: path::PathBuf
+    ) -> Result<GcRoot<*mut jsapi::JSObject>> {
+        let parent_task = this_task();
+        let (send_handle, recv_handle) = oneshot::channel();
+        let starling2 = starling.clone();
+
+        let join_handle = thread::spawn(move || {
+            let result = TokioCore::new()
+                .map_err(|e| e.into())
+                .and_then(|event_loop| {
+                    EVENT_LOOP.with(|el| {
+                        let mut el = el.borrow_mut();
+                        assert!(el.is_none());
+                        *el = Some(event_loop.handle());
+                    });
+
+                    Self::create_child(starling2.clone(), parent_task, js_file)
+                        .map(|task| (event_loop, task))
+                });
+
+            let (mut event_loop, task) = match result {
+                Ok(t) => t,
+                Err(e) => {
+                    send_handle
+                        .send(Err(e))
+                        .expect("Receiver half of the oneshot should not be dropped");
+                    return;
+                }
+            };
+
+            let id = task.handle().id();
+
+            send_handle
+                .send(Ok(task.handle()))
+                .expect("Receiver half of the oneshot should not be dropped");
+
+            if let Err(e) = event_loop.run(task) {
+                // OK to wait synchronously and maybe panic here because this is
+                // pretty last ditch: all the recoverable errors are handled in
+                // `impl Future for Task`.
+                starling2
+                    .send(StarlingMessage::TaskErrored(id, e))
+                    .wait()
+                    .expect("couldn't send task error to starling supervisory thread");
+            }
+        });
+
+        let task_handle = recv_handle
+            .wait()
+            .expect("Sender half of the oneshot should never cancel")?;
+
+        starling.send(StarlingMessage::NewTask(task_handle.clone(), join_handle))
+            .wait()
+            .expect("should never outlive supervisor");
+
+        let (sender, receiver) = oneshot::channel();
+
+        CHILDREN.with(|children| {
+            let mut children = children.borrow_mut();
+            children.insert(task_handle.id(), (task_handle, sender));
+        });
+
+        Ok(future_to_promise(
+            receiver
+                .map_err(|e| e.to_string())
+                .flatten()
+                .map_err(|e| e.to_string())
+        ))
+    }
+
+    fn create_main(starling: StarlingHandle, js_file: path::PathBuf) -> Result<Box<Task>> {
+        Self::create(starling, None, js_file)
+    }
+
+    fn create_child(
+        starling: StarlingHandle,
+        parent: TaskHandle,
+        js_file: path::PathBuf
+    ) -> Result<Box<Task>> {
+        Self::create(starling, Some(parent), js_file)
+    }
+
+    fn create(
+        starling: StarlingHandle,
+        parent: Option<TaskHandle>,
+        js_file: path::PathBuf,
+    ) -> Result<Box<Task>> {
+        let runtime = Some(JsRuntime::new(true).map_err(|_| {
+            Error::from_kind(ErrorKind::CouldNotCreateJavaScriptRuntime)
+        })?);
+
+        let capacity = starling.options().buffer_capacity_for::<TaskMessage>();
+        let (sender, receiver) = mpsc::channel(capacity);
+
+        let id = TaskId(thread::current().id());
+        let handle = TaskHandle {
+            id,
+            sender,
+        };
+
+        THIS_JS_FILE.with(|this_js_file| {
+            let mut this_js_file = this_js_file.borrow_mut();
+            assert!(this_js_file.is_none());
+            *this_js_file = Some(js_file.clone());
+        });
+
+        THIS_TASK.with(|this_task| {
+            let mut this_task = this_task.borrow_mut();
+            assert!(this_task.is_none());
+            *this_task = Some(handle.clone());
+        });
+
+        STARLING.with(|starling_handle| {
+            let mut starling_handle = starling_handle.borrow_mut();
+            assert!(starling_handle.is_none());
+            *starling_handle = Some(starling.clone());
+        });
+
+        let task = Box::new(Task {
+            handle,
+            receiver,
+            global: js::heap::Heap::default(),
+            runtime,
+            starling,
+            js_file,
+            parent,
+            state: State::Created,
+        });
+
+        GcRootSet::initialize();
+        REJECTED_PROMISES.with(|rejected_promises| {
+            RejectedPromisesTracker::register(task.runtime(), &rejected_promises);
+        });
+        task.create_global();
+
+        Ok(task)
     }
 }
 
@@ -279,8 +457,10 @@ unsafe impl Trace for Task {
     unsafe fn trace(&self, tracer: *mut jsapi::JSTracer) {
         self.global.trace(tracer);
 
-        let rejected_promises = self.rejected_promises.borrow();
-        rejected_promises.trace(tracer);
+        REJECTED_PROMISES.with(|rejected_promises| {
+            let rejected_promises = rejected_promises.borrow();
+            rejected_promises.trace(tracer);
+        });
 
         GcRootSet::with_ref(|roots| {
             roots.trace(tracer);
@@ -313,22 +493,6 @@ impl Task {
         self.poll()
     }
 
-    // Check for unhandled, rejected promises and return an error if any exist.
-    fn check_for_unhandled_rejected_promises(&mut self) -> Result<()> {
-        let unhandled = {
-            let mut tracker = self.rejected_promises.borrow_mut();
-            tracker.take()
-        };
-        if !unhandled.is_empty() {
-            // TODO: collect the rejection value from the promise, and
-            // line/column/etc if the rejection value is some kind of Error
-            // object.
-            let err = ErrorKind::JavaScriptUnhandledRejectedPromise;
-            return Err(err.into());
-        }
-        Ok(())
-    }
-
     fn evaluate_top_level(&mut self, src: String) -> Result<Async<()>> {
         let cx = self.runtime().cx();
         rooted!(in(cx) let global = self.global.get());
@@ -351,11 +515,7 @@ impl Task {
             return self.notify_starling_errored(Error::from_kind(ErrorKind::JavaScriptException));
         }
 
-        unsafe {
-            jsapi::js::RunJobs(cx);
-        }
-
-        if let Err(e) = self.check_for_unhandled_rejected_promises() {
+        if let Err(e) = drain_micro_task_queue() {
             return self.notify_starling_errored(e);
         }
 
@@ -404,12 +564,6 @@ impl Task {
                     Error::from_kind(ErrorKind::JavaScriptException)
                 );
             }
-
-            jsapi::js::RunJobs(cx);
-        }
-
-        if let Err(e) = self.check_for_unhandled_rejected_promises() {
-            return self.notify_starling_errored(e);
         }
 
         rooted!(in(cx) let mut obj = ptr::null_mut());
@@ -425,9 +579,87 @@ impl Task {
             let obj = GcRoot::new(obj.get());
             let future = promise_to_future(&obj);
             self.state = State::WaitingOnPromise(future);
+
+            if let Err(e) = drain_micro_task_queue() {
+                return self.notify_starling_errored(e);
+            }
+
             self.poll()
         } else {
+            if let Err(e) = drain_micro_task_queue() {
+                return self.notify_starling_errored(e);
+            }
+
             self.notify_starling_finished()
+        }
+    }
+
+    fn handle_child_finished(&mut self, id: TaskId) -> Result<Async<()>> {
+        assert!(self.state.is_waiting_on_promise());
+        let mut error = None;
+
+        CHILDREN.with(|children| {
+            let mut children = children.borrow_mut();
+            if let Some((_, sender)) = children.remove(&id) {
+                // The receiver half could be dropped if the promise is GC'd, so
+                // ignore any `send` errors.
+                let _ = sender.send(Ok(()));
+            } else {
+                let msg = format!(
+                    "task received message for child that isn't \
+                     actually a child: {:?}",
+                    id
+                );
+                error = Some(msg.into());
+            }
+        });
+
+        if let Some(e) = error {
+            return self.notify_starling_errored(e);
+        }
+
+        // Make sure to run JS outside of the `CHILDREN.with` closure, since JS
+        // could spawn a new task, causing us to re-enter `CHILDREN` and panic.
+        if let Err(e) = drain_micro_task_queue() {
+            self.notify_starling_errored(e)
+        } else {
+            self.poll()
+        }
+    }
+
+    fn handle_child_errored(&mut self, id: TaskId, err: Error) -> Result<Async<()>> {
+        assert!(self.state.is_waiting_on_promise());
+        let mut error = None;
+
+        CHILDREN.with(|children| {
+            let mut children = children.borrow_mut();
+            if let Some((_, sender)) = children.remove(&id) {
+                // Again, the receiver half could have been GC'd, causing the
+                // oneshot `send` to fail. If that is the case, then we
+                // propagate the error to the parent.
+                if sender.send(Err(err.clone())).is_err() {
+                    error = Some(err);
+                }
+            } else {
+                let msg = format!(
+                    "task received message for child that isn't \
+                     actually a child: {:?}",
+                    id
+                );
+                error = Some(msg.into());
+            }
+        });
+
+        if let Some(e) = error {
+            return self.notify_starling_errored(e);
+        }
+
+        // As in `handle_child_finished`, we take care that we don't run JS
+        // inside the `CHILDREN` block.
+        if let Err(e) = drain_micro_task_queue() {
+            self.notify_starling_errored(e)
+        } else {
+            self.poll()
         }
     }
 
@@ -446,25 +678,55 @@ impl Task {
 
     fn notify_parent_finished(&mut self) -> Result<Async<()>> {
         assert!(self.state.is_notify_starling_finished());
-        if let Some(parent) = self.parent.as_ref() {
+        if let Some(parent) = self.parent.clone() {
             let notify = parent.send(TaskMessage::ChildTaskFinished(self.id()));
             self.state = State::NotifyParentFinished(notify);
+            self.poll()
         } else {
-            // Don't have a parent to notify, so we're all done!
-            return Ok(Async::Ready(()));
+            self.shutdown_children()
         }
-        self.poll()
     }
 
     fn notify_parent_errored(&mut self, error: Error) -> Result<Async<()>> {
         assert!(self.state.is_notify_starling_errored());
-        if let Some(parent) = self.parent.as_ref() {
+        if let Some(parent) = self.parent.clone() {
             let notify = parent.send(TaskMessage::ChildTaskErrored(self.id(), error));
             self.state = State::NotifyParentErrored(notify);
+            self.poll()
         } else {
-            // Don't have a parent to notify, so we're all done!
-            return Ok(Async::Ready(()));
+            self.shutdown_children()
         }
+    }
+
+    fn shutdown_children(&mut self) -> Result<Async<()>> {
+        assert!(
+            self.state.is_notify_starling_finished() ||
+                self.state.is_notify_parent_finished() ||
+                self.state.is_notify_starling_errored() ||
+                self.state.is_notify_parent_errored()
+        );
+
+        let mut shutdown: Box<Future<Item = (), Error = Error>> =
+            Box::new(futures::future::ok(()));
+
+        let shutdown = CHILDREN.with(|children| {
+            let mut children = children.borrow_mut();
+            for (_, (child, _)) in children.drain() {
+                shutdown = Box::new(
+                    shutdown
+                        .join(
+                            child
+                                .send(TaskMessage::Shutdown)
+                                .map_err(|_| "could not send shutdown notice to child".into())
+                        )
+                        .map(|_| ())
+                );
+            }
+
+            shutdown
+        });
+
+        self.state = State::ShutdownChildren(shutdown);
         self.poll()
     }
 }
@@ -480,14 +742,19 @@ enum State {
 
     NotifyStarlingErrored(Error, futures::sink::Send<mpsc::Sender<StarlingMessage>>),
     NotifyParentErrored(futures::sink::Send<mpsc::Sender<TaskMessage>>),
+
+    ShutdownChildren(Box<Future<Item = (), Error = Error>>),
 }
 
 enum NextState {
     EvaluateTopLevel(String),
+    HandleChildFinished(TaskId),
+    HandleChildErrored(TaskId, Error),
     NotifyStarlingFinished,
     NotifyStarlingErrored(Error),
     NotifyParentFinished,
     NotifyParentErrored(Error),
+    ShutdownChildren,
 }
 
 impl Future for Task {
@@ -495,55 +762,155 @@ impl Future for Task {
     type Error = Error;
 
     fn poll(&mut self) -> Result<Async<Self::Item>> {
+        // Principles for error handling, recovery, and propagation when driving
+        // tasks to completion:
+        //
+        // * Whenever possible, catch errors and then inform
+        //     1. the Starling system supervisor thread,
+        //     2. the parent task (if any),
+        //     3. and this task's children
+        //   in that order to propagate them.
+        //
+        // * Tasks should never outlive the Starling system supervisor thread,
+        //   so don't attempt to catch errors sending messages to it. Just panic
+        //   if that fails, since something very wrong has happened.
+        //
+        // * We can't rely on this task's children or parent stricly observing
+        //   the tree lifetime discipline that we expose to JavaScript. There
+        //   can be races where both shut down at the same time, perhaps
+        //   involving the main task returning and the Starling system
+        //   supervisor thread sending shutdown notices to all remaining
+        //   tasks. Therefore, we allow all inter-task messages to fail
+        //   silently, locally ignoring errors, and relying on the Starling
+        //   system supervisor thread to perform ultimate clean up.
+
         let next_state = match self.state {
             State::Created => {
                 return self.read_js_module();
             }
             State::ReadingJsModule(ref mut reading) => {
-                let src = try_ready!(reading.poll());
-                NextState::EvaluateTopLevel(src)
+                match reading.poll() {
+                    Err(e) => NextState::NotifyStarlingErrored(e),
+                    Ok(Async::NotReady) => return Ok(Async::NotReady),
+                    Ok(Async::Ready(src)) => NextState::EvaluateTopLevel(src),
+                }
             }
             State::WaitingOnPromise(ref mut promise) => {
-                match try_ready!(promise.poll()) {
-                    Err(_rejection) => {
-                        let err = ErrorKind::JavaScriptUnhandledRejectedPromise;
-                        let err = err.into();
+                // The task's `async function main` is waiting on a promise, but
+                // we need to also listen for messages from our parent, the
+                // starling supervisor thread, or our children. These messages
+                // might settle this promise or other promises that trigger a
+                // chain of events that eventually settle the promise our task
+                // is waiting on. Therefore, we need to select from either the
+                // promise we're waiting on or our channel, and depending which
+                // wins the race we need to handle it differently, so we have
+                // this little type to let us know which won the race.
+                enum Which<T, E> {
+                    PromiseSettled(::std::result::Result<T, E>),
+                    ChannelClosed,
+                    Msg(TaskMessage),
+                }
+
+                // The next message from this task's channel.
+                let next_msg = self.receiver
+                    .by_ref()
+                    .take(1)
+                    .into_future()
+                    .map(|(item, _rest)| match item {
+                        None => Which::ChannelClosed,
+                        Some(msg) => Which::Msg(msg),
+                    })
+                    .map_err(|_| {
+                        ErrorKind::CouldNotReadValueFromChannel.into()
+                    });
+
+                // The promise this task is waiting on.
+                let promise = promise
+                    .map(|p| Which::PromiseSettled(p))
+                    .map_err(|_rejection| {
+                        // TODO: extract a proper error message and stack if available.
+                        ErrorKind::JavaScriptUnhandledRejectedPromise.into()
+                    });
+
+                // Race between the promise and the next channel message. Since
+                // we only care about which one wins the race, and don't plan on
+                // eventually running both to completion here (that will happen
+                // on the next `poll` where we are still in the
+                // `WaitingOnPromise` state when we recombine the futures), we
+                // ignore the `_next` parameter.
+                let mut promise_or_next_msg = promise.select(next_msg)
+                    .map(|(x, _next)| x)
+                    .map_err(|(e, _next)| e);
+
+                match promise_or_next_msg.poll() {
+                    Err(err) => {
                         NextState::NotifyStarlingErrored(err)
                     }
-                    Ok(_resolution) => {
+                    Ok(Async::NotReady) => {
+                        return Ok(Async::NotReady);
+                    }
+                    Ok(Async::Ready(Which::PromiseSettled(Err(_)))) => {
+                        let err = ErrorKind::JavaScriptUnhandledRejectedPromise.into();
+                        NextState::NotifyStarlingErrored(err)
+                    }
+                    Ok(Async::Ready(Which::PromiseSettled(Ok(_)))) => {
                         NextState::NotifyStarlingFinished
+                    }
+                    Ok(Async::Ready(Which::ChannelClosed)) => {
+                        let err = ErrorKind::CouldNotReadValueFromChannel.into();
+                        NextState::NotifyStarlingErrored(err)
+                    }
+                    Ok(Async::Ready(Which::Msg(TaskMessage::Shutdown))) => {
+                        NextState::NotifyStarlingFinished
+                    }
+                    Ok(Async::Ready(Which::Msg(TaskMessage::ChildTaskFinished(id)))) => {
+                        NextState::HandleChildFinished(id)
+                    }
+                    Ok(Async::Ready(Which::Msg(TaskMessage::ChildTaskErrored(id, err)))) => {
+                        NextState::HandleChildErrored(id, err)
+                    }
+                    Ok(Async::Ready(Which::Msg(TaskMessage::UnhandledRejectedPromise(err)))) => {
+                        NextState::NotifyStarlingErrored(err)
                     }
                 }
             }
             State::NotifyStarlingFinished(ref mut notify) => {
                 try_ready!(
                     notify
+                        .expect::<Error>("task should never outlive supervisor")
                         .poll()
-                        .map_err(|_| "couldn't notify starling of task finished")
                 );
                 NextState::NotifyParentFinished
             }
             State::NotifyParentFinished(ref mut notify) => {
                 try_ready!(
                     notify
+                        .ignore_results::<Error>()
                         .poll()
-                        .map_err(|_| "couldn't notify parent of task finished")
                 );
-                return Ok(Async::Ready(()));
+                NextState::ShutdownChildren
             }
             State::NotifyStarlingErrored(ref error, ref mut notify) => {
                 try_ready!(
                     notify
+                        .expect::<Error>("task should never outlive supervisor")
                         .poll()
-                        .map_err(|_| "couldn't notify starling of task errored")
                 );
                 NextState::NotifyParentErrored(error.clone())
             }
             State::NotifyParentErrored(ref mut notify) => {
                 try_ready!(
                     notify
+                        .ignore_results::<Error>()
                         .poll()
-                        .map_err(|_| "couldn't notify parent of task errored")
+                );
+                NextState::ShutdownChildren
+            }
+            State::ShutdownChildren(ref mut shutdown) => {
+                try_ready!(
+                    shutdown
+                        .ignore_results::<Error>()
+                        .poll()
                 );
                 return Ok(Async::Ready(()));
             }
@@ -551,10 +918,13 @@ impl Future for Task {
 
         match next_state {
             NextState::EvaluateTopLevel(src) => self.evaluate_top_level(src),
+            NextState::HandleChildFinished(id) => self.handle_child_finished(id),
+            NextState::HandleChildErrored(id, err) => self.handle_child_errored(id, err),
             NextState::NotifyStarlingFinished => self.notify_starling_finished(),
             NextState::NotifyStarlingErrored(e) => self.notify_starling_errored(e),
             NextState::NotifyParentFinished => self.notify_parent_finished(),
             NextState::NotifyParentErrored(e) => self.notify_parent_errored(e),
+            NextState::ShutdownChildren => self.shutdown_children(),
         }
     }
 }
@@ -604,4 +974,5 @@ pub(crate) enum TaskMessage {
     Shutdown,
     ChildTaskFinished(TaskId),
     ChildTaskErrored(TaskId, Error),
+    UnhandledRejectedPromise(Error),
 }

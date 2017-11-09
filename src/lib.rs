@@ -302,7 +302,10 @@ impl Starling {
                     }
                 }
 
-                StarlingMessage::NewTask(_task_handle, _join_handle) => unimplemented!(),
+                StarlingMessage::NewTask(task, join_handle) => {
+                    self.tasks.insert(task.id(), task);
+                    self.threads.insert(join_handle.thread().id(), join_handle);
+                }
             }
         }
 
@@ -320,7 +323,7 @@ pub(crate) enum StarlingMessage {
     TaskErrored(task::TaskId, Error),
 
     /// A new child task was created.
-    NewTask(task::TaskId, thread::JoinHandle<()>),
+    NewTask(task::TaskHandle, thread::JoinHandle<()>),
 }
 
 /// A handle to the Starling system.
