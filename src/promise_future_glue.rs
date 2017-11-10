@@ -77,7 +77,7 @@ use js::jsval;
 use js::rust::Runtime as JsRuntime;
 use std::os::raw;
 use std::ptr;
-use task::event_loop;
+use task;
 
 /// A future that resolves a promise with its inner future's value when ready.
 #[derive(Debug)]
@@ -168,7 +168,7 @@ where
         promise: promise.clone(),
     };
 
-    event_loop().spawn(future.fuse());
+    task::event_loop().spawn(future.fuse());
 
     promise
 }
