@@ -26,6 +26,7 @@ extern crate tokio_timer;
 #[macro_use]
 pub mod js_native;
 
+mod future_ext;
 pub mod gc_roots;
 pub(crate) mod js_global;
 pub mod promise_future_glue;
