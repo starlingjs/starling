@@ -24,7 +24,7 @@
 //!
 //! [ongoing]: https://bugzilla.mozilla.org/show_bug.cgi?id=1323066
 
-use super::{Error, ErrorKind, Result, StarlingHandle, StarlingMessage};
+use super::{Error, ErrorKind, FromPendingJsapiException, Result, StarlingHandle, StarlingMessage};
 use future_ext::FutureExt;
 use futures::{self, Async, Future, Sink, Stream};
 use futures::sync::mpsc;
@@ -507,12 +507,12 @@ impl Task {
                 .evaluate_script(global.handle(), &src, &filename, 1, rval.handle_mut());
         if let Err(()) = eval_result {
             unsafe {
-                // TODO: convert the pending exception into a meaningful error.
-                jsapi::JS_ClearPendingException(cx);
-
+                let err = Error::take_pending(cx)
+                    .expect("evaluate_script shouldn't return an Err without a \
+                             pending exception");
                 jsapi::js::RunJobs(cx);
+                return self.notify_starling_errored(err);
             }
-            return self.notify_starling_errored(Error::from_kind(ErrorKind::JavaScriptException));
         }
 
         if let Err(e) = drain_micro_task_queue() {
@@ -551,18 +551,15 @@ impl Task {
             );
 
             if !ok {
-                if jsapi::JS_IsExceptionPending(cx) {
-                    // TODO: convert the pending exception into a meaningful error.
-                    jsapi::JS_ClearPendingException(cx);
-                }
+                let err = Error::take_pending(cx)
+                    .expect("JS_CallFunctionName should not return false without \
+                             setting a pending exception");
 
                 // TODO: It isn't obvious that we should drain the micro-task
                 // queue here. But it also isn't obvious that we shouldn't.
                 // Let's investigate this sometime in the future.
                 jsapi::js::RunJobs(cx);
-                return self.notify_starling_errored(
-                    Error::from_kind(ErrorKind::JavaScriptException)
-                );
+                return self.notify_starling_errored(err);
             }
         }
 
