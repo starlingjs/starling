@@ -26,7 +26,7 @@
 
 use super::{Error, ErrorKind, FromPendingJsapiException, Result, StarlingHandle, StarlingMessage};
 use future_ext::FutureExt;
-use futures::{self, Async, Future, Sink, Stream};
+use futures::{self, Async, Future, Poll, Sink, Stream};
 use futures::sync::mpsc;
 use futures::sync::oneshot;
 use futures_cpupool::CpuFuture;
@@ -48,6 +48,7 @@ use std::ptr;
 use std::thread;
 use tokio_core;
 use tokio_core::reactor::Core as TokioCore;
+use void::Void;
 
 /// A unique identifier for some `Task`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -219,20 +220,15 @@ impl Task {
                 }
             };
 
-            let id = task.handle().id();
-
             send_handle
                 .send(Ok(task.handle()))
                 .expect("Receiver half of the oneshot should not be dropped");
 
-            if let Err(e) = event_loop.run(task) {
-                // OK to wait synchronously and maybe panic here because this is
-                // pretty last ditch: all the recoverable errors are handled in
-                // `impl Future for Task`.
-                starling
-                    .send(StarlingMessage::TaskErrored(id, e))
-                    .wait()
-                    .expect("couldn't send task error to starling supervisory thread");
+            if event_loop.run(task).is_err() {
+                // The only way we could get here is if someone transmuted a
+                // `Void` out of thin air. That is, hopefully obviously, not a
+                // good idea.
+                unreachable!();
             }
         });
 
@@ -285,20 +281,13 @@ impl Task {
                 }
             };
 
-            let id = task.handle().id();
-
             send_handle
                 .send(Ok(task.handle()))
                 .expect("Receiver half of the oneshot should not be dropped");
 
-            if let Err(e) = event_loop.run(task) {
-                // OK to wait synchronously and maybe panic here because this is
-                // pretty last ditch: all the recoverable errors are handled in
-                // `impl Future for Task`.
-                starling2
-                    .send(StarlingMessage::TaskErrored(id, e))
-                    .wait()
-                    .expect("couldn't send task error to starling supervisory thread");
+            if event_loop.run(task).is_err() {
+                // Same deal as in `spawn_main`.
+                unreachable!();
             }
         });
 
@@ -460,13 +449,15 @@ unsafe impl Trace for Task {
     }
 }
 
+type TaskPoll = Poll<(), Void>;
+
 /// State transition helper methods called from `Future::poll`.
 ///
 /// In general, these methods need to re-call `poll()` so that the newly
 /// transitioned-to state's new future gets registered with the `tokio` reactor
 /// core. If we don't, then we'll dead lock.
 impl Task {
-    fn read_js_module(&mut self) -> Result<Async<()>> {
+    fn read_js_module(&mut self) -> TaskPoll {
         assert!(self.state.is_created());
 
         let js_file_path = self.js_file.clone();
@@ -485,7 +476,7 @@ impl Task {
         self.poll()
     }
 
-    fn evaluate_top_level(&mut self, src: String) -> Result<Async<()>> {
+    fn evaluate_top_level(&mut self, src: String) -> TaskPoll {
         let cx = self.runtime().cx();
         rooted!(in(cx) let global = self.global.get());
 
@@ -512,7 +503,7 @@ impl Task {
         self.evaluate_main()
     }
 
-    fn evaluate_main(&mut self) -> Result<Async<()>> {
+    fn evaluate_main(&mut self) -> TaskPoll {
         let cx = self.runtime().cx();
         rooted!(in(cx) let global = self.global.get());
 
@@ -579,7 +570,7 @@ impl Task {
         }
     }
 
-    fn handle_child_finished(&mut self, id: TaskId) -> Result<Async<()>> {
+    fn handle_child_finished(&mut self, id: TaskId) -> TaskPoll {
         assert!(self.state.is_waiting_on_promise());
         let mut error = None;
 
@@ -612,7 +603,7 @@ impl Task {
         }
     }
 
-    fn handle_child_errored(&mut self, id: TaskId, err: Error) -> Result<Async<()>> {
+    fn handle_child_errored(&mut self, id: TaskId, err: Error) -> TaskPoll {
         assert!(self.state.is_waiting_on_promise());
         let mut error = None;
 
@@ -648,20 +639,20 @@ impl Task {
         }
     }
 
-    fn notify_starling_finished(&mut self) -> Result<Async<()>> {
+    fn notify_starling_finished(&mut self) -> TaskPoll {
         let notify = self.starling.send(StarlingMessage::TaskFinished(self.id()));
         self.state = State::NotifyStarlingFinished(notify);
         self.poll()
     }
 
-    fn notify_starling_errored(&mut self, error: Error) -> Result<Async<()>> {
+    fn notify_starling_errored(&mut self, error: Error) -> TaskPoll {
         let notify = self.starling
             .send(StarlingMessage::TaskErrored(self.id(), error.clone()));
         self.state = State::NotifyStarlingErrored(error, notify);
         self.poll()
     }
 
-    fn notify_parent_finished(&mut self) -> Result<Async<()>> {
+    fn notify_parent_finished(&mut self) -> TaskPoll {
         assert!(self.state.is_notify_starling_finished());
         if let Some(parent) = self.parent.clone() {
             let notify = parent.send(TaskMessage::ChildTaskFinished(self.id()));
@@ -672,7 +663,7 @@ impl Task {
         }
     }
 
-    fn notify_parent_errored(&mut self, error: Error) -> Result<Async<()>> {
+    fn notify_parent_errored(&mut self, error: Error) -> TaskPoll {
         assert!(self.state.is_notify_starling_errored());
         if let Some(parent) = self.parent.clone() {
             let notify = parent.send(TaskMessage::ChildTaskErrored(self.id(), error));
@@ -683,7 +674,7 @@ impl Task {
         }
     }
 
-    fn shutdown_children(&mut self) -> Result<Async<()>> {
+    fn shutdown_children(&mut self) -> TaskPoll {
         assert!(
             self.state.is_notify_starling_finished() ||
                 self.state.is_notify_parent_finished() ||
@@ -744,9 +735,9 @@ enum NextState {
 
 impl Future for Task {
     type Item = ();
-    type Error = Error;
+    type Error = Void;
 
-    fn poll(&mut self) -> Result<Async<Self::Item>> {
+    fn poll(&mut self) -> Poll<(), Void> {
         // Principles for error handling, recovery, and propagation when driving
         // tasks to completion:
         //
@@ -861,7 +852,7 @@ impl Future for Task {
             State::NotifyStarlingFinished(ref mut notify) => {
                 try_ready!(
                     notify
-                        .expect::<Error>("task should never outlive supervisor")
+                        .expect::<Void>("task should never outlive supervisor")
                         .poll()
                 );
                 NextState::NotifyParentFinished
@@ -869,7 +860,7 @@ impl Future for Task {
             State::NotifyParentFinished(ref mut notify) => {
                 try_ready!(
                     notify
-                        .ignore_results::<Error>()
+                        .ignore_results::<Void>()
                         .poll()
                 );
                 NextState::ShutdownChildren
@@ -877,7 +868,7 @@ impl Future for Task {
             State::NotifyStarlingErrored(ref error, ref mut notify) => {
                 try_ready!(
                     notify
-                        .expect::<Error>("task should never outlive supervisor")
+                        .expect::<Void>("task should never outlive supervisor")
                         .poll()
                 );
                 NextState::NotifyParentErrored(error.clone())
@@ -885,7 +876,7 @@ impl Future for Task {
             State::NotifyParentErrored(ref mut notify) => {
                 try_ready!(
                     notify
-                        .ignore_results::<Error>()
+                        .ignore_results::<Void>()
                         .poll()
                 );
                 NextState::ShutdownChildren
@@ -893,7 +884,7 @@ impl Future for Task {
             State::ShutdownChildren(ref mut shutdown) => {
                 try_ready!(
                     shutdown
-                        .ignore_results::<Error>()
+                        .ignore_results::<Void>()
                         .poll()
                 );
                 return Ok(Async::Ready(()));

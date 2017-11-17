@@ -22,6 +22,7 @@ lazy_static = "0.2.8"
 num_cpus = "1.6.2"
 tokio-core = "0.1.9"
 tokio-timer = "0.1.2"
+void = "1.0.2"
 
 [dependencies.backtrace]
 features = ["cpp_demangle"]
