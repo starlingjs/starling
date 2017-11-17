@@ -94,7 +94,8 @@ impl Error {
 /// JSAPI exception.
 ///
 // TODO: Should this move this into mozjs?
-pub trait FromPendingJsapiException: fmt::Debug + FromJSValConvertible<Config=()> {
+pub trait FromPendingJsapiException
+    : fmt::Debug + FromJSValConvertible<Config = ()> {
     /// Construct `Self` from the given JS value.
     ///
     /// If the `FromJSValConvertible` implementation for `Self` can fail, then
@@ -132,7 +133,7 @@ impl FromJSValConvertible for Error {
     unsafe fn from_jsval(
         cx: *mut jsapi::JSContext,
         val: jsapi::JS::HandleValue,
-        _: ()
+        _: (),
     ) -> CResult<Error> {
         Ok(ErrorKind::from_jsval(cx, val, ())?.map(|ek| ek.into()))
     }
@@ -147,7 +148,7 @@ impl FromJSValConvertible for ErrorKind {
     unsafe fn from_jsval(
         cx: *mut jsapi::JSContext,
         val: jsapi::JS::HandleValue,
-        _: ()
+        _: (),
     ) -> CResult<ErrorKind> {
         Ok(JsException::from_jsval(cx, val, ())?.map(ErrorKind::JavaScriptException))
     }
@@ -181,7 +182,13 @@ impl fmt::Display for JsException {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             JsException::Stringified(ref s) => write!(f, "{}", s),
-            JsException::Error { ref message, ref filename, line, column, ref stack } => {
+            JsException::Error {
+                ref message,
+                ref filename,
+                line,
+                column,
+                ref stack,
+            } => {
                 if let Some(ref filename) = *filename {
                     write!(f, "{}:", filename)?;
                 }
@@ -204,7 +211,7 @@ impl FromJSValConvertible for JsException {
     unsafe fn from_jsval(
         cx: *mut jsapi::JSContext,
         val: jsapi::JS::HandleValue,
-        _: ()
+        _: (),
     ) -> CResult<JsException> {
         // First try and convert the value into a JSErrorReport (aka some kind
         // of `Error` or `TypeError` etc.) If this fails, we'll just stringify
@@ -222,10 +229,12 @@ impl FromJSValConvertible for JsException {
                 Ok(ConversionResult::Failure(why)) => {
                     format!("<could not convert error value to string: {}>", why)
                 }
-                Err(()) => "<could not convert error value to string>".into()
+                Err(()) => "<could not convert error value to string>".into(),
             };
             debug_assert!(!jsapi::JS_IsExceptionPending(cx));
-            return Ok(ConversionResult::Success(JsException::Stringified(stringified)));
+            return Ok(ConversionResult::Success(
+                JsException::Stringified(stringified),
+            ));
         }
 
         // Ok, we have an error report. Pull out all the metadata we can get
@@ -272,7 +281,7 @@ impl FromJSValConvertible for JsException {
             filename,
             line,
             column,
-            stack
+            stack,
         }))
     }
 }
@@ -291,7 +300,7 @@ impl UnhandledRejectedPromises {
         promises: I,
     ) -> UnhandledRejectedPromises
     where
-        I: IntoIterator<Item = GcRoot<*mut jsapi::JSObject>>
+        I: IntoIterator<Item = GcRoot<*mut jsapi::JSObject>>,
     {
         let mut exceptions = vec![];
 

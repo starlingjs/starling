@@ -109,7 +109,10 @@ where
     fn poll(&mut self) -> Result<Async<()>, ()> {
         let next_self = match *self {
             Future2Promise::Finished => return Ok(Async::Ready(())),
-            Future2Promise::WaitingOnInner { ref mut future, ref promise } => {
+            Future2Promise::WaitingOnInner {
+                ref mut future,
+                ref promise,
+            } => {
                 let error = match future.poll() {
                     Ok(Async::NotReady) => {
                         return Ok(Async::NotReady);
@@ -122,7 +125,11 @@ where
                             t.to_jsval(cx, val.handle_mut());
 
                             rooted!(in(cx) let promise = promise.raw());
-                            assert!(jsapi::JS::ResolvePromise(cx, promise.handle(), val.handle()));
+                            assert!(jsapi::JS::ResolvePromise(
+                                cx,
+                                promise.handle(),
+                                val.handle()
+                            ));
 
                             if let Err(e) = task::drain_micro_task_queue() {
                                 e
@@ -162,9 +169,7 @@ where
                     // The only way we can get an error here is if we lost a
                     // race between notifying the task of an error and the task
                     // finishing.
-                    Err(_) | Ok(Async::Ready(_)) => {
-                        Future2Promise::Finished
-                    }
+                    Err(_) | Ok(Async::Ready(_)) => Future2Promise::Finished,
                 }
             }
         };
@@ -212,7 +217,7 @@ const CLOSURE_SLOT: usize = 0;
 unsafe extern "C" fn trampoline<F>(
     cx: *mut jsapi::JSContext,
     argc: raw::c_uint,
-    vp: *mut jsapi::JS::Value
+    vp: *mut jsapi::JS::Value,
 ) -> bool
 where
     F: 'static + FnOnce(*mut jsapi::JSContext, &jsapi::JS::CallArgs) -> bool,
@@ -223,10 +228,7 @@ where
     let private = jsapi::js::GetFunctionNativeReserved(callee.get(), CLOSURE_SLOT);
     let f = (*private).to_private() as *mut F;
     if f.is_null() {
-        ReportError(
-            cx,
-            b"May only be called once\0".as_ptr() as *const _
-        );
+        ReportError(cx, b"May only be called once\0".as_ptr() as *const _);
         return false;
     }
 
@@ -269,7 +271,7 @@ where
     T: 'static + FromJSValConvertible<Config = ()>,
     E: 'static + FromJSValConvertible<Config = ()>,
 {
-    inner: Select<ResultReceiver<T, E>, ResultReceiver<T, E>>
+    inner: Select<ResultReceiver<T, E>, ResultReceiver<T, E>>,
 }
 
 impl<T, E> ::std::fmt::Debug for Promise2Future<T, E>
@@ -294,18 +296,12 @@ where
         match self.inner.poll() {
             Err((oneshot::Canceled, _)) => {
                 Err(ErrorKind::JavaScriptPromiseCollectedWithoutSettling.into())
-            },
-            Ok(Async::NotReady) => {
-                Ok(Async::NotReady)
             }
+            Ok(Async::NotReady) => Ok(Async::NotReady),
             // One of the handlers was called, but then we encountered an error
             // converting the value from JS into Rust or something like that.
-            Ok(Async::Ready((Err(e), _))) => {
-                Err(e)
-            }
-            Ok(Async::Ready((Ok(result), _))) => {
-                Ok(Async::Ready(result))
-            }
+            Ok(Async::Ready((Err(e), _))) => Err(e),
+            Ok(Async::Ready((Ok(result), _))) => Ok(Async::Ready(result)),
         }
     }
 }
@@ -321,9 +317,7 @@ where
 /// If the promise object is reclaimed by the garbage collector without being
 /// resolved or rejected, then the resulting future's `poll` will return an
 /// error of kind `ErrorKind::JavaScriptPromiseCollectedWithoutSettling`.
-pub fn promise_to_future<T, E>(
-    promise: &GcRoot<*mut jsapi::JSObject>
-) -> Promise2Future<T, E>
+pub fn promise_to_future<T, E>(promise: &GcRoot<*mut jsapi::JSObject>) -> Promise2Future<T, E>
 where
     T: 'static + FromJSValConvertible<Config = ()>,
     E: 'static + FromJSValConvertible<Config = ()>,
@@ -378,7 +372,7 @@ where
         ));
 
         Promise2Future {
-            inner: resolve_receiver.select(reject_receiver)
+            inner: resolve_receiver.select(reject_receiver),
         }
     }
 }

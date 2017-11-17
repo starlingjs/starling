@@ -32,9 +32,9 @@ unsafe impl Trace for GcRootSet {
         objects.retain(|entry| {
             if let Some(inner) = entry.upgrade() {
                 let inner = inner.ptr.borrow();
-                let inner = inner.as_ref().expect(
-                    "should not have severed while GcRootSet is initialized"
-                );
+                let inner = inner
+                    .as_ref()
+                    .expect("should not have severed while GcRootSet is initialized");
                 inner.trace(tracer);
                 true
             } else {
@@ -47,9 +47,9 @@ unsafe impl Trace for GcRootSet {
         values.retain(|entry| {
             if let Some(inner) = entry.upgrade() {
                 let inner = inner.ptr.borrow();
-                let inner = inner.as_ref().expect(
-                    "should not have severed while GcRootSet is initialized"
-                );
+                let inner = inner
+                    .as_ref()
+                    .expect("should not have severed while GcRootSet is initialized");
                 inner.trace(tracer);
                 true
             } else {
@@ -122,7 +122,7 @@ impl GcRootSet {
 
             {
                 let roots = r.as_ref().expect(
-                    "should only call `GcRootSet::uninitialize` on initialized `GcRootSet`s"
+                    "should only call `GcRootSet::uninitialize` on initialized `GcRootSet`s",
                 );
 
                 // You might be expecting an assertion that all of the
@@ -205,19 +205,19 @@ struct GcRootInner<T: GcRootable> {
 }
 
 impl<T> Default for GcRootInner<T>
-    where
+where
     T: GcRootable,
-Heap<T>: Default,
+    Heap<T>: Default,
 {
     fn default() -> Self {
         GcRootInner {
-            ptr: RefCell::new(Some(Heap::default()))
+            ptr: RefCell::new(Some(Heap::default())),
         }
     }
 }
 
 impl<T> GcRootInner<T>
-    where
+where
     T: GcRootable,
 {
     // See `GcRootSet::uninitialize` for details.
@@ -276,10 +276,9 @@ where
     /// Panics if the JS task has already shutdown.
     #[inline]
     pub fn borrow(&self) -> Ref<Heap<T>> {
-        Ref::map(
-            self.inner.ptr.borrow(),
-            |r| r.as_ref().expect("should not be severed")
-        )
+        Ref::map(self.inner.ptr.borrow(), |r| {
+            r.as_ref().expect("should not be severed")
+        })
     }
 
     /// Get a raw pointer the underlying GC thing.
@@ -323,7 +322,7 @@ where
     unsafe fn from_jsval(
         cx: *mut jsapi::JSContext,
         val: jsapi::JS::HandleValue,
-        config: Self::Config
+        config: Self::Config,
     ) -> Result<ConversionResult<Self>, ()> {
         match T::from_jsval(cx, val, config) {
             Ok(cr) => Ok(cr.map(GcRoot::new)),
@@ -335,7 +334,7 @@ where
 impl<T> ToJSValConvertible for GcRoot<T>
 where
     T: ToJSValConvertible + GcRootable,
-    Heap<T>: Default
+    Heap<T>: Default,
 {
     #[inline]
     unsafe fn to_jsval(&self, cx: *mut jsapi::JSContext, rval: jsapi::JS::MutableHandleValue) {
