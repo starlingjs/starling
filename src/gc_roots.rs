@@ -20,9 +20,10 @@ thread_local! {
 /// The actual GC thing being rooted lives within the `GcRootInner`, which is
 /// reference counted. Whenever we trace this root set, we clear out any entries
 /// whose reference count has dropped to zero.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct GcRootSet {
     objects: RefCell<Vec<Weak<GcRootInner<*mut jsapi::JSObject>>>>,
+    values: RefCell<Vec<Weak<GcRootInner<jsapi::JS::Value>>>>,
 }
 
 unsafe impl Trace for GcRootSet {
@@ -38,6 +39,20 @@ unsafe impl Trace for GcRootSet {
                 true
             } else {
                 // Don't keep this root -- no one is using it anymore.
+                false
+            }
+        });
+
+        let mut values = self.values.borrow_mut();
+        values.retain(|entry| {
+            if let Some(inner) = entry.upgrade() {
+                let inner = inner.ptr.borrow();
+                let inner = inner.as_ref().expect(
+                    "should not have severed while GcRootSet is initialized"
+                );
+                inner.trace(tracer);
+                true
+            } else {
                 false
             }
         });
@@ -149,6 +164,13 @@ impl GcRootSet {
                         entry.sever();
                     }
                 }
+
+                let values = roots.values.borrow();
+                for entry in &*values {
+                    if let Some(entry) = entry.upgrade() {
+                        entry.sever();
+                    }
+                }
             }
 
             *r = None;
@@ -171,6 +193,16 @@ unsafe impl GcRootable for *mut jsapi::JSObject {
         GcRootSet::with_mut(|roots| {
             let mut objects = roots.objects.borrow_mut();
             objects.push(Rc::downgrade(&root.inner));
+        });
+    }
+}
+
+unsafe impl GcRootable for jsapi::JS::Value {
+    #[inline]
+    unsafe fn root(root: &GcRoot<jsapi::JS::Value>) {
+        GcRootSet::with_mut(|roots| {
+            let mut values = roots.values.borrow_mut();
+            values.push(Rc::downgrade(&root.inner));
         });
     }
 }
