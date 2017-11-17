@@ -457,11 +457,6 @@ unsafe impl Trace for Task {
     unsafe fn trace(&self, tracer: *mut jsapi::JSTracer) {
         self.global.trace(tracer);
 
-        REJECTED_PROMISES.with(|rejected_promises| {
-            let rejected_promises = rejected_promises.borrow();
-            rejected_promises.trace(tracer);
-        });
-
         GcRootSet::with_ref(|roots| {
             roots.trace(tracer);
         });
