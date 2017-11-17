@@ -150,7 +150,7 @@ where
                     }
                 };
 
-                let msg = task::TaskMessage::UnhandledRejectedPromise(error);
+                let msg = task::TaskMessage::UnhandledRejectedPromise { error };
                 let notify = task::this_task().send(msg);
                 Future2Promise::NotifiyingOfError { notify }
             }

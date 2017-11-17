@@ -655,7 +655,9 @@ impl Task {
     fn notify_parent_finished(&mut self) -> TaskPoll {
         assert!(self.state.is_notify_starling_finished());
         if let Some(parent) = self.parent.clone() {
-            let notify = parent.send(TaskMessage::ChildTaskFinished(self.id()));
+            let notify = parent.send(TaskMessage::ChildTaskFinished {
+                child: self.id(),
+            });
             self.state = State::NotifyParentFinished(notify);
             self.poll()
         } else {
@@ -666,7 +668,10 @@ impl Task {
     fn notify_parent_errored(&mut self, error: Error) -> TaskPoll {
         assert!(self.state.is_notify_starling_errored());
         if let Some(parent) = self.parent.clone() {
-            let notify = parent.send(TaskMessage::ChildTaskErrored(self.id(), error));
+            let notify = parent.send(TaskMessage::ChildTaskErrored {
+                child: self.id(),
+                error,
+            });
             self.state = State::NotifyParentErrored(notify);
             self.poll()
         } else {
@@ -838,14 +843,16 @@ impl Future for Task {
                     Ok(Async::Ready(Which::Msg(TaskMessage::Shutdown))) => {
                         NextState::NotifyStarlingFinished
                     }
-                    Ok(Async::Ready(Which::Msg(TaskMessage::ChildTaskFinished(id)))) => {
-                        NextState::HandleChildFinished(id)
+                    Ok(Async::Ready(Which::Msg(TaskMessage::ChildTaskFinished { child }))) => {
+                        NextState::HandleChildFinished(child)
                     }
-                    Ok(Async::Ready(Which::Msg(TaskMessage::ChildTaskErrored(id, err)))) => {
-                        NextState::HandleChildErrored(id, err)
+                    Ok(Async::Ready(Which::Msg(TaskMessage::ChildTaskErrored { child, error }))) => {
+                        NextState::HandleChildErrored(child, error)
                     }
-                    Ok(Async::Ready(Which::Msg(TaskMessage::UnhandledRejectedPromise(err)))) => {
-                        NextState::NotifyStarlingErrored(err)
+                    Ok(Async::Ready(Which::Msg(TaskMessage::UnhandledRejectedPromise {
+                        error
+                    }))) => {
+                        NextState::NotifyStarlingErrored(error)
                     }
                 }
             }
@@ -946,8 +953,29 @@ impl fmt::Debug for TaskHandle {
 /// Messages that can be sent to a task.
 #[derive(Debug)]
 pub(crate) enum TaskMessage {
+    /// A shutdown request sent from a parent task to its child.
     Shutdown,
-    ChildTaskFinished(TaskId),
-    ChildTaskErrored(TaskId, Error),
-    UnhandledRejectedPromise(Error),
+
+    /// A notification that a child task finished OK. Sent from a child task to
+    /// its parent.
+    ChildTaskFinished {
+        /// The ID of the child task that finished OK.
+        child: TaskId
+    },
+
+    /// A notification that a child task failed. Sent from the failed child task
+    /// to its parent.
+    ChildTaskErrored {
+        /// The ID of the child task that failed.
+        child: TaskId,
+        /// The error that the child task failed with.
+        error: Error,
+    },
+
+    /// A notification of an unhandled rejected promise. Sent from a future in
+    /// this task's thread to this task.
+    UnhandledRejectedPromise {
+        /// The rejection error value that was not handled.
+        error: Error,
+    },
 }
