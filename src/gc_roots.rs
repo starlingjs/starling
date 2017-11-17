@@ -115,14 +115,6 @@ impl GcRootSet {
         });
     }
 
-    /// Is the current JS task's GC roots set initialized?
-    pub fn is_initialized() -> bool {
-        TASK_GC_ROOTS.with(|r| {
-            let r = r.borrow();
-            r.is_some()
-        })
-    }
-
     /// Destroy the current JS task's GC roots set.
     pub fn uninitialize() {
         TASK_GC_ROOTS.with(|r| {
