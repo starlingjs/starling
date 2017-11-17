@@ -50,6 +50,7 @@ fn {name}() {{
         "{path}",
         {expect_success},
         &{stdout_has:?},
+        &{stderr_has:?},
     );
 }}
                 "###,
@@ -63,7 +64,8 @@ fn {name}() {{
                     .collect::<String>(),
                 path = path.display(),
                 expect_success = !opts.expect_fail,
-                stdout_has = opts.stdout_has
+                stdout_has = opts.stdout_has,
+                stderr_has = opts.stderr_has,
             ).expect("should write to generated js tests file OK");
         }
     }
@@ -75,6 +77,9 @@ fn {name}() {{
 
         //# starling-stdout-has: ...
         stdout_has: Vec<String>,
+
+        //# starling-stderr-has: ...
+        stderr_has: Vec<String>,
 
         //# starling-not-a-test
         not_a_test: bool,
@@ -97,6 +102,11 @@ fn {name}() {{
                             .skip("//# starling-stdout-has:".len())
                             .collect();
                         opts.stdout_has.push(expected.trim().into());
+                    } else if line.starts_with("//# starling-stderr-has:") {
+                        let expected: String = line.chars()
+                            .skip("//# starling-stderr-has:".len())
+                            .collect();
+                        opts.stderr_has.push(expected.trim().into());
                     } else if line.starts_with("//# starling-not-a-test") {
                         opts.not_a_test = true;
                         break;
