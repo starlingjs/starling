@@ -6,6 +6,7 @@
 //# starling-stdout-has: 5
 //# starling-stdout-has: 6
 //# starling-stdout-has: 7
+//# starling-stderr-has: error: 5 unhandled rejected promise(s)
 
 print("1");
 

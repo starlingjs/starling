@@ -5,6 +5,6 @@ async function main() {
   // properly if the parent finishes.
   while (true) {
     print("child: uh uh uh uh, staying alive, staying alive");
-    await timeout(999999999999);
+    await timeout(99999);
   }
 }
