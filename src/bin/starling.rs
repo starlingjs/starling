@@ -29,7 +29,7 @@ fn parse_cli_args() -> starling::Options {
 fn main() {
     let opts = parse_cli_args();
     if let Err(e) = opts.run() {
-        println!("error: {}", e);
+        eprintln!("error: {}", e);
         process::exit(1);
     }
 }
