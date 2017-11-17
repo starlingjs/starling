@@ -1,10 +1,10 @@
 //! Infrastructure for tracking unhandled rejected promises.
 
+use super::UnhandledRejectedPromises;
 use gc_roots::GcRoot;
 use js::jsapi;
 use js::rust::Runtime as JsRuntime;
 use std::cell::RefCell;
-use std::mem;
 use std::os;
 
 /// Keeps track of unhandled, rejected promises.
@@ -34,8 +34,18 @@ impl RejectedPromisesTracker {
 
     /// Take this tracker's set of unhandled, rejected promises, leaving an
     /// empty set in its place.
-    pub fn take(&mut self) -> Vec<GcRoot<*mut jsapi::JSObject>> {
-        mem::replace(&mut self.unhandled_rejected_promises, vec![])
+    pub fn take(&mut self) -> Option<UnhandledRejectedPromises> {
+        if self.unhandled_rejected_promises.is_empty() {
+            return None;
+        }
+
+        let cx = JsRuntime::get();
+        let rejected = unsafe {
+            let unhandled = self.unhandled_rejected_promises.drain(..);
+            UnhandledRejectedPromises::from_promises(cx, unhandled)
+        };
+        debug_assert!(self.unhandled_rejected_promises.is_empty());
+        Some(rejected)
     }
 
     /// The given rejected `promise` has been handled, so remove it from the

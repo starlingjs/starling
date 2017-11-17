@@ -1,4 +1,5 @@
 use futures::sync::mpsc;
+use gc_roots::GcRoot;
 use js::{jsapi, jsval};
 use js::conversions::{ConversionResult, FromJSValConvertible};
 use std::ffi;
@@ -39,12 +40,11 @@ pub enum ErrorKind {
     #[error_chain(display = r#"|e| write!(f, "{}", e)"#)]
     JavaScriptException(JsException),
 
-    /// There was an unhandled, rejected JavaScript promise.
-    // TODO: stack, line, column, filename, etc
+    /// There were one or more unhandled, rejected JavaScript promises.
     #[error_chain(custom)]
-    #[error_chain(description = r#"|| "Unhandled, rejected JavaScript promise""#)]
-    #[error_chain(display = r#"|| write!(f, "Unhandled, rejected JavaScript promise")"#)]
-    JavaScriptUnhandledRejectedPromise,
+    #[error_chain(description = r#"|_| "Unhandled, rejected JavaScript promise""#)]
+    #[error_chain(display = r#"|r| write!(f, "{}", r)"#)]
+    JavaScriptUnhandledRejectedPromise(UnhandledRejectedPromises),
 
     /// The JavaScript `Promise` that was going to settle this future was
     /// reclaimed by the garbage collector without having been resolved or
@@ -58,6 +58,12 @@ pub enum ErrorKind {
 impl Clone for Error {
     fn clone(&self) -> Self {
         self.to_string().into()
+    }
+}
+
+impl From<UnhandledRejectedPromises> for Error {
+    fn from(rejected: UnhandledRejectedPromises) -> Error {
+        ErrorKind::JavaScriptUnhandledRejectedPromise(rejected).into()
     }
 }
 
@@ -249,3 +255,51 @@ impl FromJSValConvertible for JsException {
 }
 
 impl FromPendingJsapiException for JsException {}
+
+/// A set of values that promises were rejected with and weren't handled.
+#[derive(Debug, Clone)]
+pub struct UnhandledRejectedPromises(Vec<JsException>);
+
+impl UnhandledRejectedPromises {
+    /// Construct an `UnhandledRejectedPromises` from the given list of
+    /// unhandled rejected promises.
+    pub(crate) unsafe fn from_promises<I>(
+        cx: *mut jsapi::JSContext,
+        promises: I,
+    ) -> UnhandledRejectedPromises
+    where
+        I: IntoIterator<Item = GcRoot<*mut jsapi::JSObject>>
+    {
+        let mut exceptions = vec![];
+
+        for p in promises {
+            rooted!(in(cx) let p = p.raw());
+            debug_assert!(!p.is_null());
+            debug_assert!(jsapi::JS::IsPromiseObject(p.handle()));
+            debug_assert_eq!(
+                jsapi::JS::GetPromiseState(p.handle()),
+                jsapi::JS::PromiseState::Rejected
+            );
+
+            rooted!(in(cx) let mut val = jsapi::JS::GetPromiseResult(p.handle()));
+            exceptions.push(JsException::infallible_from_jsval(cx, val.handle()));
+        }
+
+        debug_assert!(!exceptions.is_empty());
+        UnhandledRejectedPromises(exceptions)
+    }
+}
+
+impl fmt::Display for UnhandledRejectedPromises {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        debug_assert!(!self.0.is_empty());
+        writeln!(f, "{} unhandled rejected promise(s):", self.0.len())?;
+
+        for (i, rejected) in self.0.iter().enumerate() {
+            let header = format!(" #{} ", i + 1);
+            writeln!(f, "{:─^80}", header)?;
+            writeln!(f, "{}", rejected)?;
+        }
+        Ok(())
+    }
+}

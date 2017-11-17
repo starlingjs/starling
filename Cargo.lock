@@ -271,7 +271,7 @@ dependencies = [
 [[package]]
 name = "js"
 version = "0.1.4"
-source = "git+https://github.com/fitzgen/mozjs?branch=smup-smup-smup#3f9aeb66b83d655df07a857eac58e76284f9e2f8"
+source = "git+https://github.com/fitzgen/mozjs?branch=smup-smup-smup#d1e34d61d94a22707660066fc8fc06e808dd81fb"
 dependencies = [
  "bindgen 0.30.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "cmake 0.1.28 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -375,7 +375,7 @@ dependencies = [
 [[package]]
 name = "mozjs_sys"
 version = "0.0.0"
-source = "git+https://github.com/fitzgen/mozjs?branch=smup-smup-smup#3f9aeb66b83d655df07a857eac58e76284f9e2f8"
+source = "git+https://github.com/fitzgen/mozjs?branch=smup-smup-smup#d1e34d61d94a22707660066fc8fc06e808dd81fb"
 dependencies = [
  "libc 0.2.33 (registry+https://github.com/rust-lang/crates.io-index)",
  "libz-sys 1.0.18 (registry+https://github.com/rust-lang/crates.io-index)",
