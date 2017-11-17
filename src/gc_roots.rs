@@ -1,5 +1,6 @@
 //! Keeping GC-things alive and preventing them from being collected.
 
+use js::conversions::{ConversionResult, FromJSValConvertible, ToJSValConvertible};
 use js::heap::{Heap, Trace};
 use js::jsapi;
 use js::rust::GCMethods;
@@ -284,5 +285,36 @@ where
     /// still be live, and that it won't be reclaimed by the GC.
     pub unsafe fn raw(&self) -> T {
         self.borrow().get()
+    }
+}
+
+impl<T> FromJSValConvertible for GcRoot<T>
+where
+    T: FromJSValConvertible + GcRootable,
+    Heap<T>: Default,
+{
+    type Config = T::Config;
+
+    #[inline]
+    unsafe fn from_jsval(
+        cx: *mut jsapi::JSContext,
+        val: jsapi::JS::HandleValue,
+        config: Self::Config
+    ) -> Result<ConversionResult<Self>, ()> {
+        match T::from_jsval(cx, val, config) {
+            Ok(cr) => Ok(cr.map(GcRoot::new)),
+            Err(()) => Err(()),
+        }
+    }
+}
+
+impl<T> ToJSValConvertible for GcRoot<T>
+where
+    T: ToJSValConvertible + GcRootable,
+    Heap<T>: Default
+{
+    #[inline]
+    unsafe fn to_jsval(&self, cx: *mut jsapi::JSContext, rval: jsapi::JS::MutableHandleValue) {
+        self.raw().to_jsval(cx, rval);
     }
 }
