@@ -26,6 +26,7 @@ extern crate tokio_timer;
 #[macro_use]
 pub mod js_native;
 
+mod future_ext;
 pub mod gc_roots;
 pub(crate) mod js_global;
 pub mod promise_future_glue;
@@ -301,7 +302,10 @@ impl Starling {
                     }
                 }
 
-                StarlingMessage::NewTask(_task_handle, _join_handle) => unimplemented!(),
+                StarlingMessage::NewTask(task, join_handle) => {
+                    self.tasks.insert(task.id(), task);
+                    self.threads.insert(join_handle.thread().id(), join_handle);
+                }
             }
         }
 
@@ -319,7 +323,7 @@ pub(crate) enum StarlingMessage {
     TaskErrored(task::TaskId, Error),
 
     /// A new child task was created.
-    NewTask(task::TaskId, thread::JoinHandle<()>),
+    NewTask(task::TaskHandle, thread::JoinHandle<()>),
 }
 
 /// A handle to the Starling system.

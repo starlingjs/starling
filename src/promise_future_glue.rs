@@ -67,7 +67,7 @@
 //! future would dead lock.
 
 use super::ErrorKind;
-use futures::{Async, Future, Select};
+use futures::{self, Async, Future, Select};
 use futures::sync::oneshot;
 use gc_roots::GcRoot;
 use js::conversions::{ConversionResult, FromJSValConvertible, ToJSValConvertible};
@@ -77,18 +77,24 @@ use js::jsval;
 use js::rust::Runtime as JsRuntime;
 use std::os::raw;
 use std::ptr;
-use task::event_loop;
+use task;
 
 /// A future that resolves a promise with its inner future's value when ready.
 #[derive(Debug)]
-struct Future2Promise<F, T, E>
+enum Future2Promise<F, T, E>
 where
     F: Future<Item = T, Error = E>,
     T: ToJSValConvertible,
     E: ToJSValConvertible,
 {
-    future: F,
-    promise: GcRoot<*mut jsapi::JSObject>,
+    WaitingOnInner {
+        future: F,
+        promise: GcRoot<*mut jsapi::JSObject>,
+    },
+    NotifiyingOfError {
+        notify: futures::sink::Send<futures::sync::mpsc::Sender<task::TaskMessage>>,
+    },
+    Finished,
 }
 
 impl<F, T, E> Future for Future2Promise<F, T, E>
@@ -101,43 +107,70 @@ where
     type Error = ();
 
     fn poll(&mut self) -> Result<Async<()>, ()> {
-        match self.future.poll() {
-            Ok(Async::NotReady) => {
-                Ok(Async::NotReady)
+        let next_self = match *self {
+            Future2Promise::Finished => return Ok(Async::Ready(())),
+            Future2Promise::WaitingOnInner { ref mut future, ref promise } => {
+                let error = match future.poll() {
+                    Ok(Async::NotReady) => {
+                        return Ok(Async::NotReady);
+                    }
+                    Ok(Async::Ready(t)) => {
+                        let cx = JsRuntime::get();
+
+                        unsafe {
+                            rooted!(in(cx) let mut val = jsval::UndefinedValue());
+                            t.to_jsval(cx, val.handle_mut());
+
+                            rooted!(in(cx) let promise = promise.raw());
+                            assert!(jsapi::JS::ResolvePromise(cx, promise.handle(), val.handle()));
+
+                            if let Err(e) = task::drain_micro_task_queue() {
+                                e
+                            } else {
+                                return Ok(Async::Ready(()));
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        let cx = JsRuntime::get();
+
+                        unsafe {
+                            rooted!(in(cx) let mut val = jsval::UndefinedValue());
+                            error.to_jsval(cx, val.handle_mut());
+
+                            rooted!(in(cx) let promise = promise.raw());
+                            assert!(jsapi::JS::RejectPromise(cx, promise.handle(), val.handle()));
+
+                            if let Err(e) = task::drain_micro_task_queue() {
+                                e
+                            } else {
+                                return Ok(Async::Ready(()));
+                            }
+                        }
+                    }
+                };
+
+                let msg = task::TaskMessage::UnhandledRejectedPromise(error);
+                let notify = task::this_task().send(msg);
+                Future2Promise::NotifiyingOfError { notify }
             }
-            Ok(Async::Ready(t)) => {
-                let cx = JsRuntime::get();
-
-                unsafe {
-                    rooted!(in(cx) let mut val = jsval::UndefinedValue());
-                    t.to_jsval(cx, val.handle_mut());
-
-                    rooted!(in(cx) let promise = self.promise.raw());
-                    assert!(jsapi::JS::ResolvePromise(cx, promise.handle(), val.handle()));
-
-                    jsapi::js::RunJobs(cx);
-                    debug_assert!(!jsapi::JS_IsExceptionPending(cx));
+            Future2Promise::NotifiyingOfError { ref mut notify } => {
+                match notify.poll() {
+                    Ok(Async::NotReady) => {
+                        return Ok(Async::NotReady);
+                    }
+                    // The only way we can get an error here is if we lost a
+                    // race between notifying the task of an error and the task
+                    // finishing.
+                    Err(_) | Ok(Async::Ready(_)) => {
+                        Future2Promise::Finished
+                    }
                 }
-
-                Ok(Async::Ready(()))
             }
-            Err(e) => {
-                let cx = JsRuntime::get();
+        };
 
-                unsafe {
-                    rooted!(in(cx) let mut val = jsval::UndefinedValue());
-                    e.to_jsval(cx, val.handle_mut());
-
-                    rooted!(in(cx) let promise = self.promise.raw());
-                    assert!(jsapi::JS::RejectPromise(cx, promise.handle(), val.handle()));
-
-                    jsapi::js::RunJobs(cx);
-                    debug_assert!(!jsapi::JS_IsExceptionPending(cx));
-                }
-
-                Ok(Async::Ready(()))
-            }
-        }
+        *self = next_self;
+        self.poll()
     }
 }
 
@@ -163,12 +196,12 @@ where
     assert!(!promise.get().is_null());
     let promise = GcRoot::new(promise.get());
 
-    let future = Future2Promise {
+    let future = Future2Promise::WaitingOnInner {
         future,
         promise: promise.clone(),
     };
 
-    event_loop().spawn(future.fuse());
+    task::event_loop().spawn(future.fuse());
 
     promise
 }

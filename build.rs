@@ -37,6 +37,9 @@ mod js_tests {
             println!("cargo:rerun-if-changed={}", path.display());
 
             let opts = TestOptions::read(&path);
+            if opts.not_a_test {
+                continue;
+            }
 
             writeln!(
                 &mut generated_tests,
@@ -72,13 +75,16 @@ fn {name}() {{
 
         //# starling-stdout-has: ...
         stdout_has: Vec<String>,
+
+        //# starling-not-a-test
+        not_a_test: bool,
     }
 
     impl TestOptions {
         fn read<P: AsRef<Path>>(path: P) -> Self {
             let mut opts = Self::default();
 
-            let file = File::open(path).expect("should open JS file");
+            let file = File::open(path.as_ref()).expect("should open JS file");
             let file = BufReader::new(file);
 
             for line in file.lines() {
@@ -91,8 +97,11 @@ fn {name}() {{
                             .skip("//# starling-stdout-has:".len())
                             .collect();
                         opts.stdout_has.push(expected.trim().into());
+                    } else if line.starts_with("//# starling-not-a-test") {
+                        opts.not_a_test = true;
+                        break;
                     } else {
-                        panic!("Unknown pragma: '{}'", line);
+                        panic!("Unknown pragma: '{}' in {}", line, path.as_ref().display());
                     }
                 } else {
                     break;
