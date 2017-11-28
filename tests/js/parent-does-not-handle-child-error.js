@@ -1,4 +1,6 @@
 //# starling-fail
+//# starling-stderr-has: error: 1 unhandled rejected promise(s)
+//# starling-stderr-has: this should cause an exit 1
 
 async function main() {
   // Spawn a child task that will error. Since we don't handle the child error,

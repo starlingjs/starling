@@ -24,7 +24,7 @@
 //!
 //! [ongoing]: https://bugzilla.mozilla.org/show_bug.cgi?id=1323066
 
-use super::{Error, ErrorKind, Result, StarlingHandle, StarlingMessage};
+use super::{Error, ErrorKind, FromPendingJsapiException, Result, StarlingHandle, StarlingMessage};
 use future_ext::FutureExt;
 use futures::{self, Async, Future, Sink, Stream};
 use futures::sync::mpsc;
@@ -116,14 +116,11 @@ pub fn event_loop() -> tokio_core::reactor::Handle {
 
 /// Check for unhandled, rejected promises and return an error if any exist.
 pub(crate) fn check_for_unhandled_rejected_promises() -> Result<()> {
-    let unhandled = REJECTED_PROMISES.with(|tracker| tracker.borrow_mut().take());
-    if !unhandled.is_empty() {
-        // TODO: collect the rejection values from each of the promises, and
-        // line/column/etc if the rejection value is some kind of Error object.
-        let err = ErrorKind::JavaScriptUnhandledRejectedPromise;
-        return Err(err.into());
+    if let Some(unhandled) = REJECTED_PROMISES.with(|tracker| tracker.borrow_mut().take()) {
+        Err(unhandled.into())
+    } else {
+        Ok(())
     }
-    Ok(())
 }
 
 /// Drain the micro-task queue and then check for unhandled rejected
@@ -457,11 +454,6 @@ unsafe impl Trace for Task {
     unsafe fn trace(&self, tracer: *mut jsapi::JSTracer) {
         self.global.trace(tracer);
 
-        REJECTED_PROMISES.with(|rejected_promises| {
-            let rejected_promises = rejected_promises.borrow();
-            rejected_promises.trace(tracer);
-        });
-
         GcRootSet::with_ref(|roots| {
             roots.trace(tracer);
         });
@@ -507,12 +499,10 @@ impl Task {
                 .evaluate_script(global.handle(), &src, &filename, 1, rval.handle_mut());
         if let Err(()) = eval_result {
             unsafe {
-                // TODO: convert the pending exception into a meaningful error.
-                jsapi::JS_ClearPendingException(cx);
-
+                let err = Error::from_cx(cx);
                 jsapi::js::RunJobs(cx);
+                return self.notify_starling_errored(err);
             }
-            return self.notify_starling_errored(Error::from_kind(ErrorKind::JavaScriptException));
         }
 
         if let Err(e) = drain_micro_task_queue() {
@@ -551,18 +541,13 @@ impl Task {
             );
 
             if !ok {
-                if jsapi::JS_IsExceptionPending(cx) {
-                    // TODO: convert the pending exception into a meaningful error.
-                    jsapi::JS_ClearPendingException(cx);
-                }
+                let err = Error::from_cx(cx);
 
                 // TODO: It isn't obvious that we should drain the micro-task
                 // queue here. But it also isn't obvious that we shouldn't.
                 // Let's investigate this sometime in the future.
                 jsapi::js::RunJobs(cx);
-                return self.notify_starling_errored(
-                    Error::from_kind(ErrorKind::JavaScriptException)
-                );
+                return self.notify_starling_errored(err);
             }
         }
 
@@ -735,7 +720,7 @@ impl Task {
 enum State {
     Created,
     ReadingJsModule(CpuFuture<String, Error>),
-    WaitingOnPromise(Promise2Future<jsapi::JS::HandleValue, jsapi::JS::HandleValue>),
+    WaitingOnPromise(Promise2Future<GcRoot<jsapi::JS::Value>, GcRoot<jsapi::JS::Value>>),
 
     NotifyStarlingFinished(futures::sink::Send<mpsc::Sender<StarlingMessage>>),
     NotifyParentFinished(futures::sink::Send<mpsc::Sender<TaskMessage>>),
@@ -825,12 +810,7 @@ impl Future for Task {
                     });
 
                 // The promise this task is waiting on.
-                let promise = promise
-                    .map(|p| Which::PromiseSettled(p))
-                    .map_err(|_rejection| {
-                        // TODO: extract a proper error message and stack if available.
-                        ErrorKind::JavaScriptUnhandledRejectedPromise.into()
-                    });
+                let promise = promise.map(|p| Which::PromiseSettled(p));
 
                 // Race between the promise and the next channel message. Since
                 // we only care about which one wins the race, and don't plan on
@@ -849,9 +829,13 @@ impl Future for Task {
                     Ok(Async::NotReady) => {
                         return Ok(Async::NotReady);
                     }
-                    Ok(Async::Ready(Which::PromiseSettled(Err(_)))) => {
-                        let err = ErrorKind::JavaScriptUnhandledRejectedPromise.into();
-                        NextState::NotifyStarlingErrored(err)
+                    Ok(Async::Ready(Which::PromiseSettled(Err(val)))) => {
+                        let cx = JsRuntime::get();
+                        unsafe {
+                            rooted!(in(cx) let val = val.raw());
+                            let err = Error::infallible_from_jsval(cx, val.handle());
+                            NextState::NotifyStarlingErrored(err)
+                        }
                     }
                     Ok(Async::Ready(Which::PromiseSettled(Ok(_)))) => {
                         NextState::NotifyStarlingFinished

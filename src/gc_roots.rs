@@ -1,5 +1,6 @@
 //! Keeping GC-things alive and preventing them from being collected.
 
+use js::conversions::{ConversionResult, FromJSValConvertible, ToJSValConvertible};
 use js::heap::{Heap, Trace};
 use js::jsapi;
 use js::rust::GCMethods;
@@ -19,9 +20,10 @@ thread_local! {
 /// The actual GC thing being rooted lives within the `GcRootInner`, which is
 /// reference counted. Whenever we trace this root set, we clear out any entries
 /// whose reference count has dropped to zero.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct GcRootSet {
     objects: RefCell<Vec<Weak<GcRootInner<*mut jsapi::JSObject>>>>,
+    values: RefCell<Vec<Weak<GcRootInner<jsapi::JS::Value>>>>,
 }
 
 unsafe impl Trace for GcRootSet {
@@ -37,6 +39,20 @@ unsafe impl Trace for GcRootSet {
                 true
             } else {
                 // Don't keep this root -- no one is using it anymore.
+                false
+            }
+        });
+
+        let mut values = self.values.borrow_mut();
+        values.retain(|entry| {
+            if let Some(inner) = entry.upgrade() {
+                let inner = inner.ptr.borrow();
+                let inner = inner.as_ref().expect(
+                    "should not have severed while GcRootSet is initialized"
+                );
+                inner.trace(tracer);
+                true
+            } else {
                 false
             }
         });
@@ -99,14 +115,6 @@ impl GcRootSet {
         });
     }
 
-    /// Is the current JS task's GC roots set initialized?
-    pub fn is_initialized() -> bool {
-        TASK_GC_ROOTS.with(|r| {
-            let r = r.borrow();
-            r.is_some()
-        })
-    }
-
     /// Destroy the current JS task's GC roots set.
     pub fn uninitialize() {
         TASK_GC_ROOTS.with(|r| {
@@ -148,6 +156,13 @@ impl GcRootSet {
                         entry.sever();
                     }
                 }
+
+                let values = roots.values.borrow();
+                for entry in &*values {
+                    if let Some(entry) = entry.upgrade() {
+                        entry.sever();
+                    }
+                }
             }
 
             *r = None;
@@ -170,6 +185,16 @@ unsafe impl GcRootable for *mut jsapi::JSObject {
         GcRootSet::with_mut(|roots| {
             let mut objects = roots.objects.borrow_mut();
             objects.push(Rc::downgrade(&root.inner));
+        });
+    }
+}
+
+unsafe impl GcRootable for jsapi::JS::Value {
+    #[inline]
+    unsafe fn root(root: &GcRoot<jsapi::JS::Value>) {
+        GcRootSet::with_mut(|roots| {
+            let mut values = roots.values.borrow_mut();
+            values.push(Rc::downgrade(&root.inner));
         });
     }
 }
@@ -284,5 +309,36 @@ where
     /// still be live, and that it won't be reclaimed by the GC.
     pub unsafe fn raw(&self) -> T {
         self.borrow().get()
+    }
+}
+
+impl<T> FromJSValConvertible for GcRoot<T>
+where
+    T: FromJSValConvertible + GcRootable,
+    Heap<T>: Default,
+{
+    type Config = T::Config;
+
+    #[inline]
+    unsafe fn from_jsval(
+        cx: *mut jsapi::JSContext,
+        val: jsapi::JS::HandleValue,
+        config: Self::Config
+    ) -> Result<ConversionResult<Self>, ()> {
+        match T::from_jsval(cx, val, config) {
+            Ok(cr) => Ok(cr.map(GcRoot::new)),
+            Err(()) => Err(()),
+        }
+    }
+}
+
+impl<T> ToJSValConvertible for GcRoot<T>
+where
+    T: ToJSValConvertible + GcRootable,
+    Heap<T>: Default
+{
+    #[inline]
+    unsafe fn to_jsval(&self, cx: *mut jsapi::JSContext, rval: jsapi::JS::MutableHandleValue) {
+        self.raw().to_jsval(cx, rval);
     }
 }

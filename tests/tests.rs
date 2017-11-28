@@ -6,7 +6,8 @@ use std::process::Command;
 fn assert_starling_run_file<P>(
     path: P,
     expect_success: bool,
-    stdout_has: &[&'static str]
+    stdout_has: &[&'static str],
+    stderr_has: &[&'static str],
 )
 where
     P: AsRef<Path>,
@@ -26,10 +27,21 @@ where
         assert!(!was_success, "should fail: {}", path);
     }
 
+    let stdout = String::from_utf8_lossy(&output.stdout);
     for s in stdout_has {
         assert!(
-            String::from_utf8_lossy(&output.stdout).contains(s),
+            stdout.contains(s),
             "should have '{}' in stdout for {}",
+            s,
+            path
+        );
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for s in stderr_has {
+        assert!(
+            stderr.contains(s),
+            "should have '{}' in stderr for {}",
             s,
             path
         );

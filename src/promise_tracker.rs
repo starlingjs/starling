@@ -1,25 +1,16 @@
 //! Infrastructure for tracking unhandled rejected promises.
 
-use js;
-use js::heap::Trace;
+use super::UnhandledRejectedPromises;
+use gc_roots::GcRoot;
 use js::jsapi;
 use js::rust::Runtime as JsRuntime;
 use std::cell::RefCell;
-use std::mem;
 use std::os;
 
 /// Keeps track of unhandled, rejected promises.
 #[derive(Debug, Default)]
 pub struct RejectedPromisesTracker {
-    unhandled_rejected_promises: Vec<Box<js::heap::Heap<*mut jsapi::JSObject>>>,
-}
-
-unsafe impl Trace for RejectedPromisesTracker {
-    unsafe fn trace(&self, tracer: *mut jsapi::JSTracer) {
-        for promise in &self.unhandled_rejected_promises {
-            promise.trace(tracer);
-        }
-    }
+    unhandled_rejected_promises: Vec<GcRoot<*mut jsapi::JSObject>>,
 }
 
 impl RejectedPromisesTracker {
@@ -43,8 +34,18 @@ impl RejectedPromisesTracker {
 
     /// Take this tracker's set of unhandled, rejected promises, leaving an
     /// empty set in its place.
-    pub fn take(&mut self) -> Vec<Box<js::heap::Heap<*mut jsapi::JSObject>>> {
-        mem::replace(&mut self.unhandled_rejected_promises, vec![])
+    pub fn take(&mut self) -> Option<UnhandledRejectedPromises> {
+        if self.unhandled_rejected_promises.is_empty() {
+            return None;
+        }
+
+        let cx = JsRuntime::get();
+        let rejected = unsafe {
+            let unhandled = self.unhandled_rejected_promises.drain(..);
+            UnhandledRejectedPromises::from_promises(cx, unhandled)
+        };
+        debug_assert!(self.unhandled_rejected_promises.is_empty());
+        Some(rejected)
     }
 
     /// The given rejected `promise` has been handled, so remove it from the
@@ -52,7 +53,7 @@ impl RejectedPromisesTracker {
     fn handled(&mut self, promise: jsapi::JS::HandleObject) {
         let idx = self.unhandled_rejected_promises
             .iter()
-            .position(|p| p.get() == promise.get());
+            .position(|p| unsafe { p.raw() == promise.get() });
 
         if let Some(idx) = idx {
             self.unhandled_rejected_promises.swap_remove(idx);
@@ -64,18 +65,11 @@ impl RejectedPromisesTracker {
     fn unhandled(&mut self, promise: jsapi::JS::HandleObject) {
         let idx = self.unhandled_rejected_promises
             .iter()
-            .position(|p| p.get() == promise.get());
+            .position(|p| unsafe { p.raw() == promise.get() });
 
         if let None = idx {
-            // This needs to be performed in two steps because Heap's
-            // post-write barrier relies on the Heap instance having a
-            // stable address.
             self.unhandled_rejected_promises
-                .push(Box::new(js::heap::Heap::default()));
-            self.unhandled_rejected_promises
-                .last()
-                .unwrap()
-                .set(promise.get());
+                .push(GcRoot::new(promise.get()));
         }
     }
 
