@@ -66,7 +66,7 @@
 //! register any wake ups, `tokio` would never `poll` the future again, and the
 //! future would dead lock.
 
-use super::{Error, ErrorKind, FromPendingJsapiException};
+use super::{Error, ErrorKind};
 use futures::{self, Async, Future, Select};
 use futures::sync::oneshot;
 use gc_roots::GcRoot;
@@ -335,9 +335,7 @@ where
         let on_resolve = make_js_fn(move |cx, args| {
             match T::from_jsval(cx, args.get(0), ()) {
                 Err(()) => {
-                    let err = Error::take_pending(cx)
-                        .expect("if from_jsval returns an Err there should always \
-                                 be a pending exception");
+                    let err = Error::from_cx(cx);
                     let _ = resolve_sender.send(Err(err));
                 }
                 Ok(ConversionResult::Failure(s)) => {
@@ -355,9 +353,7 @@ where
         let on_reject = make_js_fn(move |cx, args| {
             match E::from_jsval(cx, args.get(0), ()) {
                 Err(()) => {
-                    let err = Error::take_pending(cx)
-                        .expect("if from_jsval returns an Err there should always \
-                                 be a pending exception");
+                    let err = Error::from_cx(cx);
                     let _ = reject_sender.send(Err(err));
                 }
                 Ok(ConversionResult::Failure(s)) => {

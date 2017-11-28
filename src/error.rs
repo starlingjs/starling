@@ -53,6 +53,13 @@ pub enum ErrorKind {
     #[error_chain(description = r#"|| "JavaScript Promise collected without settling""#)]
     #[error_chain(display = r#"|| write!(f, "JavaScript Promise collected without settling")"#)]
     JavaScriptPromiseCollectedWithoutSettling,
+
+    /// There was an uncatchable JavaScript exception. This typically means that
+    /// there was an OOM inside JSAPI code.
+    #[error_chain(custom)]
+    #[error_chain(description = r#"|| "There was an uncatchable JavaScript exception""#)]
+    #[error_chain(display = r#"|| write!(f, "There was an uncatchable JavaScript exception")"#)]
+    UncatchableJavaScriptException,
 }
 
 impl Clone for Error {
@@ -64,6 +71,22 @@ impl Clone for Error {
 impl From<UnhandledRejectedPromises> for Error {
     fn from(rejected: UnhandledRejectedPromises) -> Error {
         ErrorKind::JavaScriptUnhandledRejectedPromise(rejected).into()
+    }
+}
+
+impl Error {
+    /// Given that some JSAPI call returned `false`, construct an `Error` from
+    /// its pending exception, or if there is no pending exception (and
+    /// therefore an uncatchable exception such as OOM was thrown) create an
+    /// `Error` with kind `ErrorKind::UncatchableJavaScriptException`.
+    ///
+    /// # Safety
+    ///
+    /// The `cx` pointer must point to a valid `JSContext`.
+    #[inline]
+    pub unsafe fn from_cx(cx: *mut jsapi::JSContext) -> Error {
+        Error::take_pending(cx)
+            .unwrap_or_else(|| ErrorKind::UncatchableJavaScriptException.into())
     }
 }
 
@@ -86,7 +109,7 @@ pub trait FromPendingJsapiException: fmt::Debug + FromJSValConvertible<Config=()
         }
     }
 
-    /// Given a `cx` if it has a pending expection, take it and constuct a
+    /// Given a `cx` if it has a pending expection, take it and construct a
     /// `Self`. Otherwise, return `None`.
     unsafe fn take_pending(cx: *mut jsapi::JSContext) -> Option<Self> {
         if jsapi::JS_IsExceptionPending(cx) {

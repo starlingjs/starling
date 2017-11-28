@@ -499,9 +499,7 @@ impl Task {
                 .evaluate_script(global.handle(), &src, &filename, 1, rval.handle_mut());
         if let Err(()) = eval_result {
             unsafe {
-                let err = Error::take_pending(cx)
-                    .expect("evaluate_script shouldn't return an Err without a \
-                             pending exception");
+                let err = Error::from_cx(cx);
                 jsapi::js::RunJobs(cx);
                 return self.notify_starling_errored(err);
             }
@@ -543,9 +541,7 @@ impl Task {
             );
 
             if !ok {
-                let err = Error::take_pending(cx)
-                    .expect("JS_CallFunctionName should not return false without \
-                             setting a pending exception");
+                let err = Error::from_cx(cx);
 
                 // TODO: It isn't obvious that we should drain the micro-task
                 // queue here. But it also isn't obvious that we shouldn't.
