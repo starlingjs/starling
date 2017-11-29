@@ -226,9 +226,10 @@ impl Task {
                 .expect("Receiver half of the oneshot should not be dropped");
 
             if event_loop.run(task).is_err() {
-                // The only way we could get here is if someone transmuted a
-                // `Void` out of thin air. That is, hopefully obviously, not a
-                // good idea.
+                // Because our error type, `Void`, is uninhabited -- indeed,
+                // that is its sole reason for existence -- the only way we
+                // could get here is if someone transmuted a `Void` out of thin
+                // air. That is, hopefully obviously, not a good idea.
                 unreachable!();
             }
         });
