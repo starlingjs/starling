@@ -8,8 +8,7 @@ fn assert_starling_run_file<P>(
     expect_success: bool,
     stdout_has: &[&'static str],
     stderr_has: &[&'static str],
-)
-where
+) where
     P: AsRef<Path>,
 {
     let path = path.as_ref().display().to_string();

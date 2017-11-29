@@ -8,7 +8,7 @@ pub(crate) struct OrDefault<F, E>(F, PhantomData<E>);
 impl<F, E> Future for OrDefault<F, E>
 where
     F: Future,
-    F::Item: Default
+    F::Item: Default,
 {
     type Item = F::Item;
     type Error = E;
@@ -26,7 +26,7 @@ pub(crate) struct IgnoreResults<F, E>(F, PhantomData<E>);
 
 impl<F, E> Future for IgnoreResults<F, E>
 where
-    F: Future
+    F: Future,
 {
     type Item = ();
     type Error = E;
@@ -78,7 +78,7 @@ pub(crate) trait FutureExt: Future {
     fn or_default<E>(self) -> OrDefault<Self, E>
     where
         Self: Sized,
-        Self::Item: Default
+        Self::Item: Default,
     {
         OrDefault(self, PhantomData)
     }
@@ -87,7 +87,7 @@ pub(crate) trait FutureExt: Future {
     /// to completion.
     fn ignore_results<E>(self) -> IgnoreResults<Self, E>
     where
-        Self: Sized
+        Self: Sized,
     {
         IgnoreResults(self, PhantomData)
     }
