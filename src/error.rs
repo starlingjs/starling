@@ -93,7 +93,7 @@ impl Error {
 /// A trait for structured error types that can be constructed from a pending
 /// JSAPI exception.
 ///
-// TODO: Should this move this into mozjs?
+// TODO: Should we move this into mozjs?
 pub trait FromPendingJsapiException
     : fmt::Debug + FromJSValConvertible<Config = ()> {
     /// Construct `Self` from the given JS value.
