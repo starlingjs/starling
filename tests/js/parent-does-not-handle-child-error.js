@@ -11,6 +11,6 @@ async function main() {
 
   // Wait for the error to propagate.
   while (true) {
-    await timeout(50);
+    await timeout(9999);
   }
 }
