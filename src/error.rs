@@ -85,8 +85,7 @@ impl Error {
     /// The `cx` pointer must point to a valid `JSContext`.
     #[inline]
     pub unsafe fn from_cx(cx: *mut jsapi::JSContext) -> Error {
-        Error::take_pending(cx)
-            .unwrap_or_else(|| ErrorKind::UncatchableJavaScriptException.into())
+        Error::take_pending(cx).unwrap_or_else(|| ErrorKind::UncatchableJavaScriptException.into())
     }
 }
 
@@ -232,9 +231,9 @@ impl FromJSValConvertible for JsException {
                 Err(()) => "<could not convert error value to string>".into(),
             };
             debug_assert!(!jsapi::JS_IsExceptionPending(cx));
-            return Ok(ConversionResult::Success(
-                JsException::Stringified(stringified),
-            ));
+            return Ok(ConversionResult::Success(JsException::Stringified(
+                stringified,
+            )));
         }
 
         // Ok, we have an error report. Pull out all the metadata we can get

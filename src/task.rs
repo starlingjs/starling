@@ -25,7 +25,7 @@
 //! [ongoing]: https://bugzilla.mozilla.org/show_bug.cgi?id=1323066
 
 use super::{Error, ErrorKind, FromPendingJsapiException, Result, StarlingHandle, StarlingMessage};
-use future_ext::{FutureExt, ready};
+use future_ext::{ready, FutureExt};
 use futures::{self, Async, Future, Poll, Sink, Stream};
 use futures::sync::mpsc;
 use futures::sync::oneshot;
@@ -337,9 +337,8 @@ impl Task {
         parent: Option<TaskHandle>,
         js_file: path::PathBuf,
     ) -> Result<Box<Task>> {
-        let runtime = Some(JsRuntime::new(true).map_err(|_| {
-            Error::from_kind(ErrorKind::CouldNotCreateJavaScriptRuntime)
-        })?);
+        let runtime = Some(JsRuntime::new(true)
+            .map_err(|_| Error::from_kind(ErrorKind::CouldNotCreateJavaScriptRuntime))?);
 
         let capacity = starling.options().buffer_capacity_for::<TaskMessage>();
         let (sender, receiver) = mpsc::channel(capacity);
@@ -547,7 +546,7 @@ impl Task {
     #[inline]
     fn propagate<T>(self: Box<Self>, error: Error) -> Poll<T, Void>
     where
-        T: From<ShutdownChildrenErrored>
+        T: From<ShutdownChildrenErrored>,
     {
         let shutdowns_sent = self.shutdown_children();
         ready(ShutdownChildrenErrored {
@@ -560,7 +559,7 @@ impl Task {
     #[inline]
     fn finished<T>(self: Box<Self>) -> Poll<T, Void>
     where
-        T: From<ShutdownChildrenFinished>
+        T: From<ShutdownChildrenFinished>,
     {
         let shutdowns_sent = self.shutdown_children();
         ready(ShutdownChildrenFinished {
@@ -637,7 +636,8 @@ impl Task {
     }
 
     fn notify_starling_errored(self: Box<Self>, error: Error) -> NotifyStarlingErrored {
-        let notification = self.starling.send(StarlingMessage::TaskErrored(self.id(), error));
+        let notification = self.starling
+            .send(StarlingMessage::TaskErrored(self.id(), error));
         NotifyStarlingErrored {
             task: self,
             notification,
@@ -781,14 +781,11 @@ impl PollTaskStateMachine for TaskStateMachine {
         });
 
         let task = created.take().task;
-        ready(ReadingJsModule {
-            task,
-            reading,
-        })
+        ready(ReadingJsModule { task, reading })
     }
 
     fn poll_reading_js_module<'a>(
-        reading: &'a mut RentToOwn<'a, ReadingJsModule>
+        reading: &'a mut RentToOwn<'a, ReadingJsModule>,
     ) -> Poll<AfterReadingJsModule, Void> {
         let src = match reading.reading.poll() {
             Err(e) => return reading.take().task.propagate(e),
@@ -802,14 +799,16 @@ impl PollTaskStateMachine for TaskStateMachine {
             Ok(Some(promise)) => ready(WaitingOnPromise {
                 task: reading.take().task,
                 promise,
-            })
+            }),
         }
     }
 
     fn poll_waiting_on_promise<'a>(
-        waiting: &'a mut RentToOwn<'a, WaitingOnPromise>
+        waiting: &'a mut RentToOwn<'a, WaitingOnPromise>,
     ) -> Poll<AfterWaitingOnPromise, Void> {
-        let next_msg = waiting.task.receiver
+        let next_msg = waiting
+            .task
+            .receiver
             .by_ref()
             .take(1)
             .into_future()
@@ -845,12 +844,8 @@ impl PollTaskStateMachine for TaskStateMachine {
         }
 
         match waiting.promise.poll() {
-            Err(e) => {
-                waiting.take().task.propagate(e)
-            },
-            Ok(Async::NotReady) => {
-                Ok(Async::NotReady)
-            }
+            Err(e) => waiting.take().task.propagate(e),
+            Ok(Async::NotReady) => Ok(Async::NotReady),
             Ok(Async::Ready(Err(val))) => {
                 let cx = waiting.task.runtime().cx();
                 unsafe {
@@ -859,16 +854,20 @@ impl PollTaskStateMachine for TaskStateMachine {
                     waiting.take().task.propagate(err)
                 }
             }
-            Ok(Async::Ready(Ok(_))) => {
-                waiting.take().task.finished()
-            }
+            Ok(Async::Ready(Ok(_))) => waiting.take().task.finished(),
         }
     }
 
     fn poll_shutdown_children_finished<'a>(
-        shutdown: &'a mut RentToOwn<'a, ShutdownChildrenFinished>
+        shutdown: &'a mut RentToOwn<'a, ShutdownChildrenFinished>,
     ) -> Poll<AfterShutdownChildrenFinished, Void> {
-        try_ready!(shutdown.shutdowns_sent.by_ref().ignore_results::<Void>().poll());
+        try_ready!(
+            shutdown
+                .shutdowns_sent
+                .by_ref()
+                .ignore_results::<Void>()
+                .poll()
+        );
 
         if let Some(parent) = shutdown.task.parent.clone() {
             let child = shutdown.task.id();
@@ -882,23 +881,29 @@ impl PollTaskStateMachine for TaskStateMachine {
     }
 
     fn poll_notify_parent_finished<'a>(
-        notify: &'a mut RentToOwn<'a, NotifyParentFinished>
+        notify: &'a mut RentToOwn<'a, NotifyParentFinished>,
     ) -> Poll<AfterNotifyParentFinished, Void> {
         try_ready!(notify.notification.by_ref().ignore_results::<Void>().poll());
         ready(notify.take().task.notify_starling_finished())
     }
 
     fn poll_notify_starling_finished<'a>(
-        notify: &'a mut RentToOwn<'a, NotifyStarlingFinished>
+        notify: &'a mut RentToOwn<'a, NotifyStarlingFinished>,
     ) -> Poll<AfterNotifyStarlingFinished, Void> {
         try_ready!(notify.notification.by_ref().ignore_results::<Void>().poll());
         ready(Finished(()))
     }
 
     fn poll_shutdown_children_errored<'a>(
-        shutdown: &'a mut RentToOwn<'a, ShutdownChildrenErrored>
+        shutdown: &'a mut RentToOwn<'a, ShutdownChildrenErrored>,
     ) -> Poll<AfterShutdownChildrenErrored, Void> {
-        try_ready!(shutdown.shutdowns_sent.by_ref().ignore_results::<Void>().poll());
+        try_ready!(
+            shutdown
+                .shutdowns_sent
+                .by_ref()
+                .ignore_results::<Void>()
+                .poll()
+        );
 
         if let Some(parent) = shutdown.task.parent.clone() {
             let child = shutdown.task.id();
@@ -916,7 +921,7 @@ impl PollTaskStateMachine for TaskStateMachine {
     }
 
     fn poll_notify_parent_errored<'a>(
-        notify: &'a mut RentToOwn<'a, NotifyParentErrored>
+        notify: &'a mut RentToOwn<'a, NotifyParentErrored>,
     ) -> Poll<AfterNotifyParentErrored, Void> {
         try_ready!(notify.notification.by_ref().ignore_results::<Void>().poll());
         let notify = notify.take();
@@ -924,7 +929,7 @@ impl PollTaskStateMachine for TaskStateMachine {
     }
 
     fn poll_notify_starling_errored<'a>(
-        notify: &'a mut RentToOwn<'a, NotifyStarlingErrored>
+        notify: &'a mut RentToOwn<'a, NotifyStarlingErrored>,
     ) -> Poll<AfterNotifyStarlingErrored, Void> {
         try_ready!(notify.notification.by_ref().ignore_results::<Void>().poll());
         ready(Finished(()))

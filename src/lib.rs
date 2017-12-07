@@ -210,9 +210,7 @@ impl Starling {
         self.threads.insert(thread.thread().id(), thread);
 
         for msg in self.receiver.wait() {
-            let msg = msg.map_err(|_| {
-                Error::from_kind(ErrorKind::CouldNotReadValueFromChannel)
-            })?;
+            let msg = msg.map_err(|_| Error::from_kind(ErrorKind::CouldNotReadValueFromChannel))?;
 
             match msg {
                 StarlingMessage::TaskFinished(id) => {

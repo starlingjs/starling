@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 /// Wrap the given value into an `Ok(Async::Ready(...))`.
 #[inline]
 pub(crate) fn ready<T, U, E>(t: T) -> Poll<U, E>
-    where
+where
     U: From<T>,
 {
     Ok(Async::Ready(t.into()))

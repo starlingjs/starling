@@ -69,7 +69,7 @@
 use super::{Error, ErrorKind};
 use futures::{self, Async, Future, Poll, Select};
 use futures::sync::oneshot;
-use future_ext::{FutureExt, ready};
+use future_ext::{ready, FutureExt};
 use gc_roots::GcRoot;
 use js::conversions::{ConversionResult, FromJSValConvertible, ToJSValConvertible};
 use js::glue::ReportError;
@@ -126,7 +126,7 @@ where
     <F as Future>::Error: ToJSValConvertible,
 {
     fn poll_waiting_on_inner<'a>(
-        waiting: &'a mut RentToOwn<'a, WaitingOnInner<F>>
+        waiting: &'a mut RentToOwn<'a, WaitingOnInner<F>>,
     ) -> Poll<AfterWaitingOnInner<F>, GenericVoid<F>> {
         let error = match waiting.future.poll() {
             Ok(Async::NotReady) => {
@@ -180,7 +180,7 @@ where
     }
 
     fn poll_notifying_of_error<'a>(
-        notification: &'a mut RentToOwn<'a, NotifyingOfError<F>>
+        notification: &'a mut RentToOwn<'a, NotifyingOfError<F>>,
     ) -> Poll<AfterNotifyingOfError<F>, GenericVoid<F>> {
         match notification.notify.poll() {
             Ok(Async::NotReady) => {
