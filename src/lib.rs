@@ -11,8 +11,6 @@
 #[macro_use]
 extern crate derive_error_chain;
 #[macro_use]
-extern crate derive_is_enum_variant;
-#[macro_use]
 extern crate futures;
 extern crate futures_cpupool;
 #[macro_use]
@@ -20,6 +18,8 @@ extern crate js;
 #[macro_use]
 extern crate lazy_static;
 extern crate num_cpus;
+#[macro_use]
+extern crate state_machine_future;
 extern crate tokio_core;
 extern crate tokio_timer;
 extern crate void;
@@ -261,8 +261,12 @@ impl Starling {
 }
 
 /// Messages that threads can send to the Starling supervisory thread.
+///
+/// This needs to be `pub` because it is used in a trait implementation; don't
+/// actually use it!
 #[derive(Debug)]
-pub(crate) enum StarlingMessage {
+#[doc(hidden)]
+pub enum StarlingMessage {
     /// The task on the given thread completed successfully.
     TaskFinished(task::TaskId),
 
