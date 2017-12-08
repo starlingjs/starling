@@ -3,6 +3,7 @@ authors = ["The Starling Project Developers"]
 description = "The Starling JavaScript runtime."
 name = "starling"
 version = "0.1.0"
+
 [[bin]]
 doc = false
 name = "starling"
@@ -14,12 +15,12 @@ glob = "0.2.11"
 
 [dependencies]
 derive-error-chain = "0.11.0"
-derive_is_enum_variant = "0.1.1"
 error-chain = "0.11.0"
 futures = "0.1.15"
 futures-cpupool = "0.1.6"
 lazy_static = "0.2.8"
 num_cpus = "1.6.2"
+state_machine_future = "0.1.1"
 tokio-core = "0.1.9"
 tokio-timer = "0.1.2"
 void = "1.0.2"

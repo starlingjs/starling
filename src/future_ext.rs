@@ -1,6 +1,15 @@
-use futures::{Async, Future};
+use futures::{Async, Future, Poll};
 use std::fmt::Debug;
 use std::marker::PhantomData;
+
+/// Wrap the given value into an `Ok(Async::Ready(...))`.
+#[inline]
+pub(crate) fn ready<T, U, E>(t: T) -> Poll<U, E>
+where
+    U: From<T>,
+{
+    Ok(Async::Ready(t.into()))
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct OrDefault<F, E>(F, PhantomData<E>);
@@ -73,6 +82,12 @@ where
 
 /// Extension methods for `Future`.
 pub(crate) trait FutureExt: Future {
+    /// Get a mutable reference to this `Future` to use as a `Future` without
+    /// taking ownership.
+    fn by_ref(&mut self) -> &mut Self {
+        self
+    }
+
     /// If the future results in an error, instead return the default
     /// `Self::Item` value.
     fn or_default<E>(self) -> OrDefault<Self, E>

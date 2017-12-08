@@ -67,115 +67,130 @@
 //! future would dead lock.
 
 use super::{Error, ErrorKind};
-use futures::{self, Async, Future, Select};
+use futures::{self, Async, Future, Poll, Select};
 use futures::sync::oneshot;
+use future_ext::{ready, FutureExt};
 use gc_roots::GcRoot;
 use js::conversions::{ConversionResult, FromJSValConvertible, ToJSValConvertible};
 use js::glue::ReportError;
 use js::jsapi;
 use js::jsval;
 use js::rust::Runtime as JsRuntime;
+use state_machine_future::RentToOwn;
+use std::marker::PhantomData;
 use std::os::raw;
 use std::ptr;
 use task;
+use void::Void;
+
+type GenericVoid<T> = (Void, PhantomData<T>);
 
 /// A future that resolves a promise with its inner future's value when ready.
-#[derive(Debug)]
-enum Future2Promise<F, T, E>
+#[derive(StateMachineFuture)]
+#[allow(dead_code)]
+enum Future2Promise<F>
 where
-    F: Future<Item = T, Error = E>,
-    T: ToJSValConvertible,
-    E: ToJSValConvertible,
+    F: Future,
+    <F as Future>::Item: ToJSValConvertible,
+    <F as Future>::Error: ToJSValConvertible,
 {
+    /// Initially, we are waiting on the inner future to be ready or error.
+    #[state_machine_future(start, transitions(Finished, NotifyingOfError))]
     WaitingOnInner {
         future: F,
         promise: GcRoot<*mut jsapi::JSObject>,
     },
-    NotifiyingOfError {
+
+    /// If we encountered an error that needs to propagate, we must send it to
+    /// the task.
+    #[state_machine_future(transitions(Finished))]
+    NotifyingOfError {
         notify: futures::sink::Send<futures::sync::mpsc::Sender<task::TaskMessage>>,
+        phantom: PhantomData<F>,
     },
-    Finished,
+
+    /// All done.
+    #[state_machine_future(ready)]
+    Finished(PhantomData<F>),
+
+    /// We explicitly handle all errors, so make `Future::Error` impossible to
+    /// construct.
+    #[state_machine_future(error)]
+    Impossible(GenericVoid<F>),
 }
 
-impl<F, T, E> Future for Future2Promise<F, T, E>
+impl<F> PollFuture2Promise<F> for Future2Promise<F>
 where
-    F: Future<Item = T, Error = E>,
-    T: ToJSValConvertible,
-    E: ToJSValConvertible,
+    F: Future,
+    <F as Future>::Item: ToJSValConvertible,
+    <F as Future>::Error: ToJSValConvertible,
 {
-    type Item = ();
-    type Error = ();
-
-    fn poll(&mut self) -> Result<Async<()>, ()> {
-        let next_self = match *self {
-            Future2Promise::Finished => return Ok(Async::Ready(())),
-            Future2Promise::WaitingOnInner {
-                ref mut future,
-                ref promise,
-            } => {
-                let error = match future.poll() {
-                    Ok(Async::NotReady) => {
-                        return Ok(Async::NotReady);
-                    }
-                    Ok(Async::Ready(t)) => {
-                        let cx = JsRuntime::get();
-
-                        unsafe {
-                            rooted!(in(cx) let mut val = jsval::UndefinedValue());
-                            t.to_jsval(cx, val.handle_mut());
-
-                            rooted!(in(cx) let promise = promise.raw());
-                            assert!(jsapi::JS::ResolvePromise(
-                                cx,
-                                promise.handle(),
-                                val.handle()
-                            ));
-
-                            if let Err(e) = task::drain_micro_task_queue() {
-                                e
-                            } else {
-                                return Ok(Async::Ready(()));
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        let cx = JsRuntime::get();
-
-                        unsafe {
-                            rooted!(in(cx) let mut val = jsval::UndefinedValue());
-                            error.to_jsval(cx, val.handle_mut());
-
-                            rooted!(in(cx) let promise = promise.raw());
-                            assert!(jsapi::JS::RejectPromise(cx, promise.handle(), val.handle()));
-
-                            if let Err(e) = task::drain_micro_task_queue() {
-                                e
-                            } else {
-                                return Ok(Async::Ready(()));
-                            }
-                        }
-                    }
-                };
-
-                let msg = task::TaskMessage::UnhandledRejectedPromise { error };
-                let notify = task::this_task().send(msg);
-                Future2Promise::NotifiyingOfError { notify }
+    fn poll_waiting_on_inner<'a>(
+        waiting: &'a mut RentToOwn<'a, WaitingOnInner<F>>,
+    ) -> Poll<AfterWaitingOnInner<F>, GenericVoid<F>> {
+        let error = match waiting.future.poll() {
+            Ok(Async::NotReady) => {
+                return Ok(Async::NotReady);
             }
-            Future2Promise::NotifiyingOfError { ref mut notify } => {
-                match notify.poll() {
-                    Ok(Async::NotReady) => {
-                        return Ok(Async::NotReady);
+            Ok(Async::Ready(t)) => {
+                let cx = JsRuntime::get();
+
+                unsafe {
+                    rooted!(in(cx) let mut val = jsval::UndefinedValue());
+                    t.to_jsval(cx, val.handle_mut());
+
+                    rooted!(in(cx) let promise = waiting.promise.raw());
+                    assert!(jsapi::JS::ResolvePromise(
+                        cx,
+                        promise.handle(),
+                        val.handle()
+                    ));
+
+                    if let Err(e) = task::drain_micro_task_queue() {
+                        e
+                    } else {
+                        return ready(Finished(PhantomData));
                     }
-                    // The only way we can get an error here is if we lost a
-                    // race between notifying the task of an error and the task
-                    // finishing.
-                    Err(_) | Ok(Async::Ready(_)) => Future2Promise::Finished,
+                }
+            }
+            Err(error) => {
+                let cx = JsRuntime::get();
+
+                unsafe {
+                    rooted!(in(cx) let mut val = jsval::UndefinedValue());
+                    error.to_jsval(cx, val.handle_mut());
+
+                    rooted!(in(cx) let promise = waiting.promise.raw());
+                    assert!(jsapi::JS::RejectPromise(cx, promise.handle(), val.handle()));
+
+                    if let Err(e) = task::drain_micro_task_queue() {
+                        e
+                    } else {
+                        return ready(Finished(PhantomData));
+                    }
                 }
             }
         };
 
-        *self = next_self;
-        self.poll()
+        let msg = task::TaskMessage::UnhandledRejectedPromise { error };
+        ready(NotifyingOfError {
+            notify: task::this_task().send(msg),
+            phantom: PhantomData,
+        })
+    }
+
+    fn poll_notifying_of_error<'a>(
+        notification: &'a mut RentToOwn<'a, NotifyingOfError<F>>,
+    ) -> Poll<AfterNotifyingOfError<F>, GenericVoid<F>> {
+        match notification.notify.poll() {
+            Ok(Async::NotReady) => {
+                return Ok(Async::NotReady);
+            }
+            // The only way we can get an error here is if we lost a
+            // race between notifying the task of an error and the task
+            // finishing.
+            Err(_) | Ok(Async::Ready(_)) => ready(Finished(PhantomData)),
+        }
     }
 }
 
@@ -200,14 +215,8 @@ where
     });
     assert!(!promise.get().is_null());
     let promise = GcRoot::new(promise.get());
-
-    let future = Future2Promise::WaitingOnInner {
-        future,
-        promise: promise.clone(),
-    };
-
-    task::event_loop().spawn(future.fuse());
-
+    let future = Future2Promise::start(future, promise.clone()).ignore_results();
+    task::event_loop().spawn(future);
     promise
 }
 
