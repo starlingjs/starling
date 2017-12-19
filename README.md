@@ -12,6 +12,8 @@ variable to the directory containing `libclang.so.1`.
 For example, in Ubuntu 16.04:
 ```
 sudo apt-get install autoconf2.13 clang-4.0
+sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-4.0 100
+sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-4.0 100
 LIBCLANG_PATH=/usr/lib/llvm-4.0/lib/ cargo +nightly build
 ```
 
