@@ -32,6 +32,7 @@ use futures::sync::oneshot;
 use futures_cpupool::CpuFuture;
 use gc_roots::{GcRoot, GcRootSet};
 use js;
+use js::sc;
 use js::heap::Trace;
 use js::jsapi;
 use js::jsval;
@@ -71,7 +72,7 @@ thread_local! {
 
     static CHILDREN: RefCell<HashMap<
         TaskId,
-        (TaskHandle, oneshot::Sender<Result<()>>)
+        (TaskHandle, oneshot::Sender<Result<GcRoot<jsapi::JS::Value>>>)
     >> = {
         RefCell::new(HashMap::new())
     };
@@ -135,6 +136,18 @@ pub(crate) fn drain_micro_task_queue() -> Result<()> {
     }
     check_for_unhandled_rejected_promises()
 }
+
+type StructuredCloneBuffer = sc::StructuredCloneBuffer<'static, sc::SameProcessDifferentThread>;
+
+static STRUCTURED_CLONE_CALLBACKS: jsapi::JSStructuredCloneCallbacks =
+    jsapi::JSStructuredCloneCallbacks {
+        read: None,
+        write: None,
+        reportError: None,
+        readTransfer: None,
+        writeTransfer: None,
+        freeTransfer: None,
+    };
 
 /// A `Task` is a JavaScript execution thread.
 ///
@@ -557,26 +570,37 @@ impl Task {
     }
 
     #[inline]
-    fn finished<T>(self: Box<Self>) -> Poll<T, Void>
+    fn finished<T>(self: Box<Self>, result: GcRoot<jsapi::JS::Value>) -> Poll<T, Void>
     where
         T: From<ShutdownChildrenFinished>,
     {
         let shutdowns_sent = self.shutdown_children();
         ready(ShutdownChildrenFinished {
             task: self,
+            result,
             shutdowns_sent,
         })
     }
 
-    fn handle_child_finished(&mut self, id: TaskId) -> Result<()> {
-        let mut error = None;
+    fn handle_child_finished(
+        &mut self,
+        id: TaskId,
+        mut result: StructuredCloneBuffer,
+    ) -> Result<()> {
+        let cx = self.runtime().cx();
+        rooted!(in(cx) let mut val = jsval::UndefinedValue());
+        if let Err(()) = result.read(val.handle_mut()) {
+            return Err(unsafe { Error::from_cx(cx) });
+        }
+        let val = GcRoot::new(val.get());
 
+        let mut error = None;
         CHILDREN.with(|children| {
             let mut children = children.borrow_mut();
             if let Some((_, sender)) = children.remove(&id) {
                 // The receiver half could be dropped if the promise is GC'd, so
                 // ignore any `send` errors.
-                let _ = sender.send(Ok(()));
+                let _ = sender.send(Ok(val));
             } else {
                 let msg = format!(
                     "task received message for child that isn't \
@@ -689,9 +713,11 @@ enum TaskStateMachine {
     },
 
     /// The task has finished OK, and now we need to shutdown its children.
-    #[state_machine_future(transitions(NotifyParentFinished, NotifyStarlingFinished))]
+    #[state_machine_future(transitions(NotifyParentFinished, NotifyStarlingFinished,
+                                       ShutdownChildrenErrored))]
     ShutdownChildrenFinished {
         task: Box<Task>,
+        result: GcRoot<jsapi::JS::Value>,
         shutdowns_sent: Box<Future<Item = (), Error = Error>>,
     },
 
@@ -795,7 +821,10 @@ impl PollTaskStateMachine for TaskStateMachine {
 
         match reading.task.evaluate_top_level(src) {
             Err(e) => reading.take().task.propagate(e),
-            Ok(None) => reading.take().task.finished(),
+            Ok(None) => reading
+                .take()
+                .task
+                .finished(GcRoot::new(jsval::UndefinedValue())),
             Ok(Some(promise)) => ready(WaitingOnPromise {
                 task: reading.take().task,
                 promise,
@@ -826,10 +855,13 @@ impl PollTaskStateMachine for TaskStateMachine {
             }
             Ok(Async::Ready(Some(TaskMessage::Shutdown))) => {
                 waiting.task.parent = None;
-                return waiting.take().task.finished();
+                return waiting
+                    .take()
+                    .task
+                    .finished(GcRoot::new(jsval::UndefinedValue()));
             }
-            Ok(Async::Ready(Some(TaskMessage::ChildTaskFinished { child }))) => {
-                return match waiting.task.handle_child_finished(child) {
+            Ok(Async::Ready(Some(TaskMessage::ChildTaskFinished { child, result }))) => {
+                return match waiting.task.handle_child_finished(child, result) {
                     Err(e) => waiting.take().task.propagate(e),
                     Ok(()) => ready(waiting.take()),
                 };
@@ -854,7 +886,7 @@ impl PollTaskStateMachine for TaskStateMachine {
                     waiting.take().task.propagate(err)
                 }
             }
-            Ok(Async::Ready(Ok(_))) => waiting.take().task.finished(),
+            Ok(Async::Ready(Ok(val))) => waiting.take().task.finished(val),
         }
     }
 
@@ -871,9 +903,22 @@ impl PollTaskStateMachine for TaskStateMachine {
 
         if let Some(parent) = shutdown.task.parent.clone() {
             let child = shutdown.task.id();
+            let shutdown = shutdown.take();
+
+            let result = {
+                let cx = shutdown.task.runtime().cx();
+                rooted!(in(cx) let result = unsafe { shutdown.result.raw() });
+                let mut buf = StructuredCloneBuffer::new(&STRUCTURED_CLONE_CALLBACKS);
+                if let Err(()) = buf.write(result.handle()) {
+                    let e = unsafe { Error::from_cx(cx) };
+                    return shutdown.task.propagate(e);
+                }
+                buf
+            };
+
             ready(NotifyParentFinished {
-                task: shutdown.take().task,
-                notification: parent.send(TaskMessage::ChildTaskFinished { child }),
+                task: shutdown.task,
+                notification: parent.send(TaskMessage::ChildTaskFinished { child, result }),
             })
         } else {
             ready(shutdown.take().task.notify_starling_finished())
@@ -988,6 +1033,9 @@ pub enum TaskMessage {
     ChildTaskFinished {
         /// The ID of the child task that finished OK.
         child: TaskId,
+        /// A structured clone buffer containing the serialized result of the
+        /// child's `main` function.
+        result: StructuredCloneBuffer,
     },
 
     /// A notification that a child task failed. Sent from the failed child task
