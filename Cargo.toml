@@ -1,6 +1,7 @@
 [package]
 authors = ["The Starling Project Developers"]
 description = "The Starling JavaScript runtime."
+license = "Apache-2.0"
 name = "starling"
 version = "0.1.0"
 

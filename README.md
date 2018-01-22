@@ -4,18 +4,28 @@
 
 The Starling JavaScript runtime.
 
-## Building
+**⚠️ VERY MUCH A WORK IN PROGRESS ⚠️**
 
-To build starling, you need `autoconf` 2.13 and `clang` at least 3.9. You should set the `LIBCLANG_PATH` environment
-variable to the directory containing `libclang.so.1`.
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 
-For example, in Ubuntu 16.04:
-```
-sudo apt-get install autoconf2.13 clang-4.0
-sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-4.0 100
-sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-4.0 100
-LIBCLANG_PATH=/usr/lib/llvm-4.0/lib/ cargo +nightly build
-```
 
-The `LIBCLANG_PATH` environment variable is only needed by codegen when compiling `mozjs`.
-Once it is built, you can use the usual cargo commands such as `cargo +nightly test`.
+- [License](#license)
+- [Contributing](#contributing)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
+## License
+
+Licensed under the
+[Apache License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0).
+
+## Contributing
+
+Want to help build Starling? Check out
+[CONTRIBUTING.md](https://github.com/starlingjs/starling/blob/master/CONTRIBUTING.md)
+for build instructions and hacking.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
+licensed as above, without any additional terms or conditions.
