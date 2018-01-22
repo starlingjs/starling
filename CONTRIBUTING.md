@@ -2,7 +2,7 @@
 
 Hi! We'd love to have your contributions! If you want help or mentorship, reach
 out to us in a GitHub issue, or ping `fitzgen` in
-[#servo on irc.mozilla.org](irc://irc.mozilla.org#servo) and introduce yourself.
+[#starling on irc.mozilla.org](irc://irc.mozilla.org#starling) and introduce yourself.
 
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
@@ -55,20 +55,13 @@ Ensure that each commit stands alone, and passes tests. This enables better `git
 bisect`ing when needed. If your commits do not stand on their own, then rebase
 them on top of the latest master and squash them into a single commit.
 
-All pull requests undergo code review before merging. To request review, comment
-`r? @github_username_of_reviewer`. They we will respond with `r+` to approve the
-pull request, or may leave feedback and request changes to the pull request. Any
-changes should be squashed into the original commit.
+All pull requests undergo code review before merging. To request review, use
+GitHub's pull request review functionality.
 
 Unsure who to ask for review? Ask any of:
 
 * `@fitzgen`
 * `@tschneidereit`
-
-More resources:
-
-* [Servo's GitHub Workflow](https://github.com/servo/servo/wiki/Github-workflow)
-* [Beginner's Guide to Rebasing and Squashing](https://github.com/servo/servo/wiki/Beginner's-guide-to-rebasing-and-squashing)
 
 ## Automatic Code Formatting
 
